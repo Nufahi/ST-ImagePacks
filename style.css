@@ -364,6 +364,16 @@ body.ipk_modal_open .ipk_fab {
     border-color: var(--SmartThemeQuoteColor, #4a7ab8);
 }
 
+/* In instant mode a tap applies the picture, so give the cards a clear
+   "this is a button" feel. Multi-select mode dims the unpicked ones instead. */
+.ipk_card:active {
+    transform: scale(0.96);
+}
+
+.ipk_grid.ipk_multi .ipk_card:not(.ipk_selected) img {
+    opacity: 0.55;
+}
+
 .ipk_check_mark {
     position: absolute;
     top: 4px;

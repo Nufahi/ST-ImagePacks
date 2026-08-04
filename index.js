@@ -672,6 +672,7 @@
         activePackId: '',
         images: [],
         selected: new Set(),
+        multiMode: false,    // taps toggle selection instead of inserting at once
         targetInput: null,   // set when the picker was opened from a hook button
         modal: null,
         dom: {},
@@ -870,9 +871,14 @@
         d.search.addEventListener('input', render);
         d.selectAll.addEventListener('click', () => {
             for (const im of visibleImages()) state.selected.add(im.id);
+            if (state.targetInput) state.multiMode = true;
             render();
         });
-        d.selectNone.addEventListener('click', () => { state.selected.clear(); render(); });
+        d.selectNone.addEventListener('click', () => {
+            state.selected.clear();
+            state.multiMode = false;
+            render();
+        });
         d.deleteSelected.addEventListener('click', onDeleteSelected);
         d.insert.addEventListener('click', onInsert);
 
@@ -905,6 +911,7 @@
         document.body.classList.remove('ipk_modal_open');
         state.targetInput = null;
         state.selected.clear();
+        state.multiMode = false;
         releaseUrls();
     }
 
@@ -943,14 +950,18 @@
         }
 
         const picking = !!state.targetInput;
-        d.insert.classList.toggle('ipk_hidden', !picking);
-        d.appendWrap.classList.toggle('ipk_hidden', !picking || !state.targetInput?.multiple);
+        // The Insert button only matters once you're building a multi-image
+        // selection — a plain tap already inserts.
+        const showInsert = picking && (state.multiMode || state.selected.size > 0);
+        d.insert.classList.toggle('ipk_hidden', !showInsert);
+        d.appendWrap.classList.toggle('ipk_hidden', !showInsert || !state.targetInput?.multiple);
         d.deleteSelected.classList.toggle('ipk_hidden', state.selected.size === 0);
+        d.grid.classList.toggle('ipk_multi', picking && state.multiMode);
 
         if (state.selected.size) {
             d.status.textContent = t('status.selected', { count: state.selected.size });
         } else if (picking) {
-            d.status.textContent = t('status.pickHint');
+            d.status.textContent = t('status.tapHint');
         } else {
             d.status.textContent = '';
         }
@@ -994,20 +1005,51 @@
         });
         card.appendChild(del);
 
-        card.addEventListener('click', () => {
+        const toggle = () => {
             if (state.selected.has(im.id)) state.selected.delete(im.id);
             else state.selected.add(im.id);
+            // Leaving the last item deselected drops us back to instant mode.
+            if (!state.selected.size && state.targetInput) state.multiMode = false;
             render();
-        });
+        };
 
-        // Double-click = pick just this one and insert immediately. That's the
-        // fast path when you only need a single image.
-        card.addEventListener('dblclick', async (e) => {
-            e.preventDefault();
-            if (!state.targetInput) return;
+        // One tap on a picture applies it straight away — that's the whole
+        // point of the extension, no "now press Insert" ceremony. Multi-select
+        // is opt-in: long-press (or ctrl/shift-click) arms it, after which
+        // taps toggle selection until you insert or clear.
+        card.addEventListener('click', (e) => {
+            if (card.__ipkSkipClick) { card.__ipkSkipClick = false; return; }
+            const wantsMulti = state.multiMode || e.ctrlKey || e.metaKey || e.shiftKey;
+            if (!state.targetInput || wantsMulti) {
+                if (e.ctrlKey || e.metaKey || e.shiftKey) state.multiMode = !!state.targetInput;
+                toggle();
+                return;
+            }
             state.selected.clear();
             state.selected.add(im.id);
-            await onInsert();
+            onInsert();
+        });
+
+        // Long-press arms multi-select. Touch only needs ~450ms; the same
+        // handler covers a held mouse button on desktop.
+        let pressTimer = null;
+        const startPress = () => {
+            clearTimeout(pressTimer);
+            pressTimer = setTimeout(() => {
+                card.__ipkSkipClick = true;
+                if (state.targetInput) state.multiMode = true;
+                navigator.vibrate?.(15);
+                toggle();
+            }, 450);
+        };
+        const cancelPress = () => clearTimeout(pressTimer);
+        card.addEventListener('touchstart', startPress, { passive: true });
+        card.addEventListener('mousedown', startPress);
+        for (const evt of ['touchend', 'touchmove', 'touchcancel', 'mouseup', 'mouseleave']) {
+            card.addEventListener(evt, cancelPress, { passive: true });
+        }
+        card.addEventListener('contextmenu', (e) => {
+            if (state.targetInput) e.preventDefault();
         });
 
         return card;
@@ -1158,6 +1200,7 @@
         await refreshPacks();
         await loadActiveImages();
         state.selected.clear();
+        state.multiMode = false;
         openModal();
         render();
         if (!state.images.length) {
@@ -1172,6 +1215,7 @@
         await refreshPacks();
         await loadActiveImages();
         state.selected.clear();
+        state.multiMode = false;
         openModal();
         render();
     }

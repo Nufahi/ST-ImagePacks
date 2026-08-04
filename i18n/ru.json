@@ -29,7 +29,7 @@
     "target.hint": "→ {{name}}",
     "target.unknown": "поле файла",
     "status.selected": "Выбрано: {{count}}",
-    "status.pickHint": "Выбери картинки и нажми «Вставить» (двойной клик — вставить одну).",
+    "status.tapHint": "Тыкни картинку — она сразу вставится · удержание — выбрать несколько",
     "status.importing": "Загружаю {{done}} / {{total}}…",
     "status.imported": "Добавлено: {{count}}",
     "status.emptyPack": "Пак пустой — сначала добавь картинки.",

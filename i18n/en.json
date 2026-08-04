@@ -1,15 +1,11 @@
 {
     "app": "Image Packs",
-
     "wand.title": "Open the Image Packs manager",
     "slash.help": "Open the Image Packs manager",
-
     "hook.title": "Insert from an image pack",
     "fab.title": "Tap: show insert buttons · Hold: open manager · Drag to move",
-
     "pack.default": "My pack",
     "pack.newDefault": "New pack",
-
     "btn.close": "Close",
     "btn.newPack": "New pack",
     "btn.renamePack": "Rename pack",
@@ -21,44 +17,34 @@
     "btn.deleteSelected": "Delete selected",
     "btn.deleteImage": "Delete image",
     "btn.insert": "Insert",
-
     "opt.append": "Append to existing files",
-
     "search.placeholder": "Search by name…",
     "search.found": "{{count}} found",
-
     "count.images.one": "{{count}} image",
     "count.images.few": "{{count}} images",
     "count.images.many": "{{count}} images",
-
     "empty.title": "This pack is empty",
     "empty.hint": "Add files or a folder — or just drop images here.",
     "drop.hint": "Drop images to add them to the pack",
-
     "target.hint": "→ {{name}}",
     "target.unknown": "file field",
-
     "status.selected": "Selected: {{count}}",
-    "status.pickHint": "Pick images, then press Insert (double-click inserts one).",
+    "status.tapHint": "Tap a picture to use it right away · hold for multi-select",
     "status.importing": "Importing {{done}} / {{total}}…",
     "status.imported": "Added: {{count}}",
     "status.emptyPack": "Pack is empty — add images first.",
-
     "prompt.newPack": "Name for the new pack:",
     "prompt.renamePack": "New pack name:",
     "confirm.deletePack": "Delete pack \"{{name}}\" and all {{count}} images in it?",
     "confirm.deleteImages": "Delete {{count}} selected image(s)?",
-
     "toast.imported": "Added {{count}} image(s)",
     "toast.inserted": "Inserted {{count}} image(s)",
     "toast.nothingSelected": "Nothing selected",
     "toast.noImages": "No images among the selected files",
     "toast.packDeleted": "Pack deleted",
     "toast.revealOn": "Tap a highlighted button next to an image field",
-
     "err.datatransfer": "This browser refused the file injection",
     "err.inputGone": "The target field no longer exists on the page",
-
     "set.enabled": "Enable Image Packs",
     "set.showButtons": "Show the insert button next to image fields",
     "set.revealMode": "When to show the insert buttons",
