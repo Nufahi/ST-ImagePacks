@@ -1,0 +1,520 @@
+/* ============================================================
+ * Image Packs for SillyTavern
+ * Colors come from ST's --SmartTheme* variables so the panel matches
+ * whatever theme is active.
+ * ============================================================ */
+
+.ipk_hidden {
+    display: none !important;
+}
+
+body.ipk_modal_open {
+    overflow: hidden;
+}
+
+/* ---------- Hook button attached to foreign file inputs ---------- */
+.ipk_anchor_rel {
+    position: relative;
+}
+
+.ipk_hook_btn {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    z-index: 30;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    margin: 0;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    cursor: pointer;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 20, 0.85));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.25));
+    border-radius: 5px;
+    opacity: 0.65;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ipk_hook_btn:hover {
+    opacity: 1;
+    transform: scale(1.08);
+}
+
+/* ---------- Reveal mode ----------
+ * In reveal mode the hook buttons are hidden entirely until the user taps the
+ * floating button. That keeps phones clean: no stray icons covering the host
+ * extension's own controls, no accidental taps. Once revealed the buttons get
+ * noticeably bigger and pulse so they're easy to hit with a thumb. */
+body.ipk_reveal_mode .ipk_hook_btn {
+    display: none;
+}
+
+body.ipk_reveal_mode.ipk_reveal_on .ipk_hook_btn {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    font-size: 15px;
+    color: #fff;
+    background: var(--SmartThemeQuoteColor, #4a7ab8);
+    border-color: rgba(255, 255, 255, 0.5);
+    border-radius: 8px;
+    opacity: 1;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    animation: ipk_pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ipk_pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.ipk_reveal_mode.ipk_reveal_on .ipk_hook_btn {
+        animation: none;
+    }
+}
+
+/* Dim the page slightly while revealed so the targets pop out. */
+body.ipk_reveal_mode.ipk_reveal_on::after {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
+    content: '';
+    background: rgba(0, 0, 0, 0.25);
+}
+
+/* ---------- Floating reveal button ---------- */
+.ipk_fab {
+    position: fixed;
+    right: 14px;
+    bottom: 84px;
+    z-index: 10040;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    font-size: 17px;
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+    background: var(--SmartThemeBlurTintColor, rgba(25, 25, 25, 0.9));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.25));
+    border-radius: 50%;
+    opacity: 0.55;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.ipk_fab:hover,
+.ipk_fab.ipk_fab_drag {
+    opacity: 1;
+}
+
+.ipk_fab.ipk_fab_active {
+    color: #fff;
+    background: var(--SmartThemeQuoteColor, #4a7ab8);
+    border-color: transparent;
+    opacity: 1;
+}
+
+.ipk_fab.ipk_fab_drag {
+    transform: scale(1.1);
+}
+
+/* The picker is above everything, so hide the FAB while it's open. */
+body.ipk_modal_open .ipk_fab {
+    display: none;
+}
+
+/* ---------- Modal shell ---------- */
+.ipk_modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10050;
+}
+
+.ipk_backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(3px);
+}
+
+.ipk_panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(1100px, calc(100vw - 24px));
+    height: min(820px, calc(100vh - var(--topBarBlockSize, 0px) - 24px));
+    margin: calc(var(--topBarBlockSize, 0px) + 8px) auto 16px;
+    overflow: hidden;
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    background: var(--SmartThemeBlurTintColor, var(--SmartThemeBotMesBlurTintColor, #1a1a1a));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+    border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- Header ---------- */
+.ipk_header {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+}
+
+.ipk_title {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 1.05em;
+    font-weight: 600;
+}
+
+.ipk_target {
+    flex: 1 1 auto;
+    overflow: hidden;
+    font-size: 0.85em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.7;
+}
+
+.ipk_header_actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+}
+
+.ipk_icon_btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    border-radius: 6px;
+    opacity: 0.75;
+}
+
+.ipk_icon_btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    opacity: 1;
+}
+
+/* ---------- Toolbars ---------- */
+.ipk_toolbar,
+.ipk_subbar,
+.ipk_footer {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 12px;
+}
+
+.ipk_toolbar {
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.08));
+}
+
+.ipk_subbar {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    font-size: 0.85em;
+    opacity: 0.85;
+}
+
+.ipk_footer {
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+}
+
+.ipk_spacer {
+    flex: 1 1 auto;
+}
+
+.ipk_sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    background: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.15));
+}
+
+.ipk_btn {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 10px;
+    font-size: 0.9em;
+    cursor: pointer;
+    user-select: none;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.15));
+    border-radius: 6px;
+}
+
+.ipk_btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.ipk_btn_sm {
+    padding: 5px 8px;
+}
+
+.ipk_btn.ipk_primary {
+    background: var(--SmartThemeQuoteColor, #4a7ab8);
+    border-color: transparent;
+    color: #fff;
+}
+
+.ipk_btn.ipk_primary:hover {
+    filter: brightness(1.15);
+}
+
+.ipk_btn.ipk_danger:hover {
+    color: #ff8b8b;
+    background: rgba(255, 80, 80, 0.18);
+}
+
+.ipk_link {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    opacity: 0.8;
+}
+
+.ipk_link:hover {
+    opacity: 1;
+}
+
+.ipk_danger_text {
+    color: #ff8b8b;
+}
+
+.ipk_select {
+    min-width: 150px;
+    max-width: 260px;
+    height: auto;
+    padding: 4px 6px;
+    margin: 0;
+}
+
+.ipk_search {
+    width: min(240px, 45vw);
+    height: auto;
+    padding: 4px 8px;
+    margin: 0;
+}
+
+.ipk_check {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    margin: 0;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.ipk_status {
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+/* ---------- Body / grid ---------- */
+.ipk_body {
+    position: relative;
+    flex: 1 1 auto;
+    padding: 10px 12px;
+    overflow-y: auto;
+}
+
+.ipk_grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+}
+
+.ipk_card {
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.25);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    aspect-ratio: 1 / 1;
+}
+
+.ipk_card img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.ipk_card.ipk_selected {
+    border-color: var(--SmartThemeQuoteColor, #4a7ab8);
+}
+
+.ipk_check_mark {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    color: #fff;
+    background: var(--SmartThemeQuoteColor, #4a7ab8);
+    border-radius: 50%;
+}
+
+.ipk_card.ipk_selected .ipk_check_mark {
+    display: flex;
+}
+
+.ipk_card_del {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.ipk_card:hover .ipk_card_del {
+    opacity: 1;
+}
+
+.ipk_card_del:hover {
+    background: rgba(200, 40, 40, 0.9);
+}
+
+@media (hover: none) {
+    .ipk_card_del {
+        opacity: 0.85;
+    }
+}
+
+.ipk_card_name {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    padding: 3px 5px;
+    overflow: hidden;
+    font-size: 0.7em;
+    color: #fff;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+}
+
+.ipk_empty {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    padding: 50px 20px;
+    text-align: center;
+    opacity: 0.6;
+}
+
+.ipk_empty i {
+    font-size: 2.4em;
+}
+
+/* ---------- Drag & drop ---------- */
+.ipk_drop_hint {
+    position: absolute;
+    inset: 6px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1em;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.55);
+    border: 2px dashed var(--SmartThemeQuoteColor, #4a7ab8);
+    border-radius: 10px;
+}
+
+.ipk_body.ipk_dragging .ipk_drop_hint {
+    display: flex;
+}
+
+/* ---------- Settings panel ---------- */
+#ipk_settings .ipk_note {
+    display: block;
+    margin: 4px 0 8px;
+    opacity: 0.65;
+}
+
+#ipk_settings #ipk_set_maxside {
+    width: 120px;
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 700px) {
+    .ipk_panel {
+        width: 100vw;
+        height: calc(100vh - var(--topBarBlockSize, 0px));
+        margin: var(--topBarBlockSize, 0px) 0 0;
+        border: none;
+        border-radius: 0;
+    }
+
+    .ipk_grid {
+        grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+    }
+
+    .ipk_search,
+    .ipk_select {
+        width: 100%;
+        max-width: none;
+    }
+
+    .ipk_target {
+        display: none;
+    }
+
+    /* Bigger thumb targets on small screens. */
+    body.ipk_reveal_mode.ipk_reveal_on .ipk_hook_btn {
+        width: 38px;
+        height: 38px;
+        font-size: 16px;
+    }
+
+    .ipk_fab {
+        width: 48px;
+        height: 48px;
+        font-size: 18px;
+    }
+
+    .ipk_btn {
+        padding: 7px 11px;
+    }
+
+    .ipk_toolbar,
+    .ipk_footer {
+        padding: 8px;
+    }
+}

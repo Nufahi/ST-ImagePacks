@@ -1,0 +1,74 @@
+{
+    "app": "Image Packs",
+
+    "wand.title": "Open the Image Packs manager",
+    "slash.help": "Open the Image Packs manager",
+
+    "hook.title": "Insert from an image pack",
+    "fab.title": "Tap: show insert buttons · Hold: open manager · Drag to move",
+
+    "pack.default": "My pack",
+    "pack.newDefault": "New pack",
+
+    "btn.close": "Close",
+    "btn.newPack": "New pack",
+    "btn.renamePack": "Rename pack",
+    "btn.deletePack": "Delete pack",
+    "btn.addFiles": "Add files",
+    "btn.addFolder": "Add folder",
+    "btn.selectAll": "Select all",
+    "btn.selectNone": "Clear selection",
+    "btn.deleteSelected": "Delete selected",
+    "btn.deleteImage": "Delete image",
+    "btn.insert": "Insert",
+
+    "opt.append": "Append to existing files",
+
+    "search.placeholder": "Search by name…",
+    "search.found": "{{count}} found",
+
+    "count.images.one": "{{count}} image",
+    "count.images.few": "{{count}} images",
+    "count.images.many": "{{count}} images",
+
+    "empty.title": "This pack is empty",
+    "empty.hint": "Add files or a folder — or just drop images here.",
+    "drop.hint": "Drop images to add them to the pack",
+
+    "target.hint": "→ {{name}}",
+    "target.unknown": "file field",
+
+    "status.selected": "Selected: {{count}}",
+    "status.pickHint": "Pick images, then press Insert (double-click inserts one).",
+    "status.importing": "Importing {{done}} / {{total}}…",
+    "status.imported": "Added: {{count}}",
+    "status.emptyPack": "Pack is empty — add images first.",
+
+    "prompt.newPack": "Name for the new pack:",
+    "prompt.renamePack": "New pack name:",
+    "confirm.deletePack": "Delete pack \"{{name}}\" and all {{count}} images in it?",
+    "confirm.deleteImages": "Delete {{count}} selected image(s)?",
+
+    "toast.imported": "Added {{count}} image(s)",
+    "toast.inserted": "Inserted {{count}} image(s)",
+    "toast.nothingSelected": "Nothing selected",
+    "toast.noImages": "No images among the selected files",
+    "toast.packDeleted": "Pack deleted",
+    "toast.revealOn": "Tap a highlighted button next to an image field",
+
+    "err.datatransfer": "This browser refused the file injection",
+    "err.inputGone": "The target field no longer exists on the page",
+
+    "set.enabled": "Enable Image Packs",
+    "set.showButtons": "Show the insert button next to image fields",
+    "set.revealMode": "When to show the insert buttons",
+    "set.reveal.auto": "Auto — on hover (desktop), on tap (phone)",
+    "set.reveal.tap": "Only after tapping the floating button",
+    "set.reveal.always": "Always visible",
+    "set.revealHint": "On a phone the buttons stay hidden so they don't cover anything. Tap the floating round button to light up every image field, then tap the one you need. Hold the floating button to open the manager, drag it to move it.",
+    "set.rememberPack": "Remember the last used pack",
+    "set.maxSide": "Max image side on import (px, 0 = keep original)",
+    "set.maxSideHint": "Images are downscaled when imported to keep the local database small. GIFs are never re-encoded.",
+    "set.openManager": "Open manager",
+    "set.help": "Packs are stored locally in IndexedDB. The insert button appears next to any image file field — the gallery, avatars, reference image slots and so on."
+}
