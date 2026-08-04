@@ -433,15 +433,72 @@
         return p && p !== document.body ? p : input;
     }
 
-    function hookInput(input) {
+    /* ------------------------------------------------------------
+     * Slot grouping
+     *
+     * A single upload "slot" often owns several file inputs — notsosilly, for
+     * example, has one behind the Upload button and another behind the
+     * thumbnail overlay, both pointing at the same reference image. Hooking
+     * every input gives you two identical buttons for one field, which is just
+     * clutter. So inputs are grouped by their nearest shared container and the
+     * group gets exactly ONE button, mounted on whichever anchor is physically
+     * largest (the thumbnail beats the little button — bigger target, and it's
+     * where you'd naturally tap to change the picture).
+     * ------------------------------------------------------------ */
+    const GROUP_ATTR = 'data-ipk-slot';
+    const GROUP_MAX_DEPTH = 5;
+    const GROUP_MAX_INPUTS = 4;   // above this it's a panel, not a slot
+
+    function imageInputsIn(el) {
+        return Array.from(el.querySelectorAll('input[type="file"]')).filter(isImageInput);
+    }
+
+    /** Nearest ancestor that looks like one upload slot, or null if the input
+     *  stands alone. */
+    function slotContainerFor(input) {
+        let el = input.parentElement;
+        let depth = 0;
+        while (el && el !== document.body && depth < GROUP_MAX_DEPTH) {
+            const found = imageInputsIn(el);
+            if (found.length > 1) {
+                // Too many inputs means we've climbed past the slot into the
+                // whole panel — don't merge unrelated fields into one button.
+                return found.length <= GROUP_MAX_INPUTS ? el : null;
+            }
+            el = el.parentElement;
+            depth++;
+        }
+        return null;
+    }
+
+    function visibleArea(el) {
+        if (!el) return 0;
+        const r = el.getBoundingClientRect();
+        return r.width * r.height;
+    }
+
+    /** Pick the anchor with the largest on-screen area — that's the thumbnail
+     *  rather than the small "upload" button. */
+    function bestAnchor(inputs) {
+        let best = null;
+        let bestArea = -1;
+        for (const i of inputs) {
+            const a = anchorFor(i);
+            if (!a || a === document.body) continue;
+            const area = visibleArea(a);
+            if (area > bestArea) { bestArea = area; best = { anchor: a, input: i }; }
+        }
+        return best;
+    }
+
+    function hookInput(input, forcedAnchor) {
         if (!settings().showButtons) return;
         if (input.getAttribute(HOOKED_ATTR) === '1') return;
         input.setAttribute(HOOKED_ATTR, '1');
 
-        const anchor = anchorFor(input);
+        const anchor = forcedAnchor || anchorFor(input);
         if (!anchor || anchor === document.body) return;
-        // Don't double up if a sibling input in the same anchor already has one
-        // (notsosilly puts two inputs — button + thumbnail overlay — per slot).
+        // Don't double up if this anchor already carries a button.
         if (anchor.querySelector(`:scope > .${BTN_CLASS}`)) return;
 
         const btn = document.createElement('button');
@@ -478,20 +535,63 @@
 
     function scanInputs(root) {
         if (!settings().enabled || !settings().showButtons) return;
-        const scope = root instanceof Element ? root : document;
-        const inputs = [];
-        if (scope instanceof HTMLInputElement && isImageInput(scope)) inputs.push(scope);
-        scope.querySelectorAll?.('input[type="file"]').forEach((i) => {
-            if (isImageInput(i)) inputs.push(i);
-        });
+        // Always scan the whole document: a slot's inputs can arrive in
+        // separate mutations, and grouping needs to see all of them.
+        const inputs = imageInputsIn(document);
+        if (!inputs.length) return;
+
+        // Hosts re-render their panels and can drop our button while keeping
+        // the input alive. Un-mark those so they get hooked again below.
         for (const i of inputs) {
-            try { hookInput(i); } catch (e) { console.warn(`${LOG} hook failed`, e); }
+            if (i.getAttribute(HOOKED_ATTR) !== '1') continue;
+            const btn = i.__ipkButton;
+            if (btn && !document.contains(btn)) {
+                i.__ipkButton = null;
+                i.removeAttribute(HOOKED_ATTR);
+            }
+        }
+
+        // Bucket inputs by their shared slot container. Ungrouped inputs get
+        // their own bucket keyed by the element itself.
+        const groups = new Map();
+        for (const i of inputs) {
+            if (i.getAttribute(HOOKED_ATTR) === '1') continue;
+            let key;
+            try { key = slotContainerFor(i) || i; } catch (e) { key = i; }
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(i);
+        }
+
+        for (const [key, list] of groups) {
+            try {
+                // Slot already has a button from an earlier pass — just mark
+                // the newcomers as handled so they don't grow their own.
+                if (key instanceof Element && key.querySelector(`.${BTN_CLASS}`)) {
+                    for (const i of list) i.setAttribute(HOOKED_ATTR, '1');
+                    continue;
+                }
+                const pick = bestAnchor(list) || { anchor: null, input: list[0] };
+                if (key instanceof Element && list.length > 1) {
+                    key.setAttribute(GROUP_ATTR, '1');
+                }
+                hookInput(pick.input, pick.anchor);
+                // Everything else in the slot is covered by that one button.
+                // They share the reference so a re-render that kills the button
+                // un-marks the whole group, not just the one input.
+                for (const i of list) {
+                    i.setAttribute(HOOKED_ATTR, '1');
+                    i.__ipkButton = pick.input.__ipkButton;
+                }
+            } catch (e) {
+                console.warn(`${LOG} hook failed`, e);
+            }
         }
     }
 
     function removeAllButtons() {
         document.querySelectorAll(`.${BTN_CLASS}`).forEach((b) => b.remove());
         document.querySelectorAll(`[${HOOKED_ATTR}]`).forEach((i) => i.removeAttribute(HOOKED_ATTR));
+        document.querySelectorAll(`[${GROUP_ATTR}]`).forEach((i) => i.removeAttribute(GROUP_ATTR));
     }
 
     /* ============================================================
@@ -750,6 +850,8 @@
                     <div class="ipk_spacer"></div>
                     <div class="ipk_link" id="ipk_select_all" data-i18n="btn.selectAll"></div>
                     <div class="ipk_link" id="ipk_select_none" data-i18n="btn.selectNone"></div>
+                    <div class="ipk_link ipk_hidden" id="ipk_move_selected" data-i18n="btn.moveSelected"></div>
+                    <div class="ipk_link ipk_hidden" id="ipk_copy_selected" data-i18n="btn.copySelected"></div>
                     <div class="ipk_link ipk_danger_text ipk_hidden" id="ipk_delete_selected" data-i18n="btn.deleteSelected"></div>
                 </div>
 
@@ -797,6 +899,8 @@
             summary: $('ipk_summary'),
             selectAll: $('ipk_select_all'),
             selectNone: $('ipk_select_none'),
+            moveSelected: $('ipk_move_selected'),
+            copySelected: $('ipk_copy_selected'),
             deleteSelected: $('ipk_delete_selected'),
             grid: $('ipk_grid'),
             empty: $('ipk_empty'),
@@ -879,6 +983,8 @@
             state.multiMode = false;
             render();
         });
+        d.moveSelected.addEventListener('click', () => onTransferSelected(false));
+        d.copySelected.addEventListener('click', () => onTransferSelected(true));
         d.deleteSelected.addEventListener('click', onDeleteSelected);
         d.insert.addEventListener('click', onInsert);
 
@@ -955,7 +1061,12 @@
         const showInsert = picking && (state.multiMode || state.selected.size > 0);
         d.insert.classList.toggle('ipk_hidden', !showInsert);
         d.appendWrap.classList.toggle('ipk_hidden', !showInsert || !state.targetInput?.multiple);
-        d.deleteSelected.classList.toggle('ipk_hidden', state.selected.size === 0);
+        const hasSel = state.selected.size > 0;
+        d.deleteSelected.classList.toggle('ipk_hidden', !hasSel);
+        // Move/copy need somewhere to go — pointless with a single pack.
+        const canTransfer = hasSel && state.packs.length > 0;
+        d.moveSelected.classList.toggle('ipk_hidden', !canTransfer);
+        d.copySelected.classList.toggle('ipk_hidden', !canTransfer);
         d.grid.classList.toggle('ipk_multi', picking && state.multiMode);
 
         if (state.selected.size) {
@@ -1149,6 +1260,107 @@
         render();
         d.status.textContent = t('status.imported', { count: records.length });
         toast(t('toast.imported', { count: records.length }), 'success');
+    }
+
+    /* ------------------------------------------------------------
+     * Moving / copying images between packs.
+     *
+     * Importing the same folder into three packs is silly, so selected images
+     * can be shovelled into another pack directly. "Move" just rewrites the
+     * packId on the existing record — no re-encoding, no duplicate blob.
+     * "Copy" clones the record under a fresh id, which does duplicate the blob
+     * but keeps the two packs independent (deleting from one won't gut the
+     * other, which is what people expect from a copy).
+     * ------------------------------------------------------------ */
+    async function onTransferSelected(copy) {
+        if (!state.selected.size) return;
+        const targetId = await pickPackDialog(copy ? t('prompt.copyTo') : t('prompt.moveTo'));
+        if (!targetId) return;
+
+        const ids = new Set(state.selected);
+        const records = state.images.filter((im) => ids.has(im.id));
+        if (!records.length) return;
+
+        const out = [];
+        let base = Date.now();
+        for (const rec of records) {
+            const full = rec.blob ? rec : await dbGetImage(rec.id);
+            if (!full) continue;
+            out.push(copy
+                ? { ...full, id: uid('img'), packId: targetId, added: base++ }
+                : { ...full, packId: targetId, added: base++ });
+        }
+        if (!out.length) return;
+
+        await dbPutImages(out);
+        const target = await dbGetPack(targetId);
+        if (target) { target.updated = Date.now(); await dbPutPack(target); }
+
+        if (!copy) {
+            // The records moved out of the current pack — drop their cached
+            // object URLs so the grid doesn't show ghosts.
+            for (const id of ids) urlCache.delete(id);
+        }
+        state.selected.clear();
+        state.multiMode = false;
+        await loadActiveImages();
+        render();
+        toast(t(copy ? 'toast.copied' : 'toast.moved', {
+            count: out.length,
+            name: target?.name || '',
+        }), 'success');
+    }
+
+    /** Small pack chooser. Excludes the pack we're currently looking at and
+     *  offers creating a new one inline. */
+    async function pickPackDialog(title) {
+        const others = state.packs.filter((p) => p.id !== state.activePackId);
+        const NEW = '__ipk_new__';
+        const options = [
+            ...others.map((p) => ({ value: p.id, label: p.name })),
+            { value: NEW, label: t('pack.createNew') },
+        ];
+
+        let chosen = '';
+        const c = ctx();
+        try {
+            if (c?.Popup && c?.POPUP_TYPE) {
+                const wrap = document.createElement('div');
+                wrap.className = 'ipk_pick_pack';
+                wrap.innerHTML = `<div class="ipk_pick_title">${escapeHtml(title)}</div>`;
+                const sel = document.createElement('select');
+                sel.className = 'text_pole';
+                sel.innerHTML = options
+                    .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`)
+                    .join('');
+                wrap.appendChild(sel);
+                const ok = await c.Popup.show.confirm(wrap, null);
+                if (!ok) return '';
+                chosen = sel.value;
+            }
+        } catch (e) { /* fall through to the prompt fallback */ }
+
+        if (!chosen) {
+            // No ST popup available: number the packs and ask for an index.
+            const lines = options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
+            const raw = window.prompt(`${title}\n\n${lines}`, '1');
+            const idx = Number(raw) - 1;
+            if (!Number.isInteger(idx) || idx < 0 || idx >= options.length) return '';
+            chosen = options[idx].value;
+        }
+
+        if (chosen === NEW) {
+            const name = await promptText(t('prompt.newPack'), t('pack.newDefault'));
+            if (!name) return '';
+            const p = {
+                id: uid('pack'), name: name.trim(),
+                created: Date.now(), updated: Date.now(), order: state.packs.length,
+            };
+            await dbPutPack(p);
+            await refreshPacks();
+            return p.id;
+        }
+        return chosen;
     }
 
     async function onDeleteSelected() {

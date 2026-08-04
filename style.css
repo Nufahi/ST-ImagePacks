@@ -472,6 +472,22 @@ body.ipk_modal_open .ipk_fab {
 }
 
 /* ---------- Settings panel ---------- */
+/* ---------- Pack chooser popup ---------- */
+.ipk_pick_pack {
+    min-width: min(320px, 70vw);
+    text-align: left;
+}
+
+.ipk_pick_pack .ipk_pick_title {
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.ipk_pick_pack select {
+    width: 100%;
+}
+
+/* ---------- Settings panel ---------- */
 #ipk_settings .ipk_note {
     display: block;
     margin: 4px 0 8px;
