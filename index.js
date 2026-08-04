@@ -1311,45 +1311,81 @@
         }), 'success');
     }
 
-    /** Small pack chooser. Excludes the pack we're currently looking at and
-     *  offers creating a new one inline. */
-    async function pickPackDialog(title) {
+    /** Pack chooser. Built by hand rather than through ST's Popup: that API
+     *  stringifies whatever it's handed, so passing an element rendered a
+     *  literal "[object HTMLDivElement]". A plain list of buttons is also just
+     *  nicer here — one tap picks the destination, no dropdown + confirm. */
+    function pickPackDialog(title) {
         const others = state.packs.filter((p) => p.id !== state.activePackId);
         const NEW = '__ipk_new__';
-        const options = [
-            ...others.map((p) => ({ value: p.id, label: p.name })),
-            { value: NEW, label: t('pack.createNew') },
-        ];
 
-        let chosen = '';
-        const c = ctx();
-        try {
-            if (c?.Popup && c?.POPUP_TYPE) {
-                const wrap = document.createElement('div');
-                wrap.className = 'ipk_pick_pack';
-                wrap.innerHTML = `<div class="ipk_pick_title">${escapeHtml(title)}</div>`;
-                const sel = document.createElement('select');
-                sel.className = 'text_pole';
-                sel.innerHTML = options
-                    .map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`)
-                    .join('');
-                wrap.appendChild(sel);
-                const ok = await c.Popup.show.confirm(wrap, null);
-                if (!ok) return '';
-                chosen = sel.value;
+        return new Promise((resolve) => {
+            const back = document.createElement('div');
+            back.className = 'ipk_pick_back';
+
+            const box = document.createElement('div');
+            box.className = 'ipk_pick_box';
+
+            const head = document.createElement('div');
+            head.className = 'ipk_pick_title';
+            head.textContent = title;
+            box.appendChild(head);
+
+            const list = document.createElement('div');
+            list.className = 'ipk_pick_list';
+
+            let closed = false;
+            const finish = (value) => {
+                if (closed) return;
+                closed = true;
+                document.removeEventListener('keydown', onKey, true);
+                back.remove();
+                resolve(value);
+            };
+            const onKey = (e) => {
+                if (e.key !== 'Escape') return;
+                e.stopPropagation();   // don't let the picker modal close too
+                finish('');
+            };
+
+            for (const p of others) {
+                const row = document.createElement('div');
+                row.className = 'ipk_pick_row';
+                row.innerHTML = '<i class="fa-solid fa-folder"></i>';
+                const label = document.createElement('span');
+                label.textContent = p.name;
+                row.appendChild(label);
+                row.addEventListener('click', () => finish(p.id));
+                list.appendChild(row);
             }
-        } catch (e) { /* fall through to the prompt fallback */ }
 
-        if (!chosen) {
-            // No ST popup available: number the packs and ask for an index.
-            const lines = options.map((o, i) => `${i + 1}. ${o.label}`).join('\n');
-            const raw = window.prompt(`${title}\n\n${lines}`, '1');
-            const idx = Number(raw) - 1;
-            if (!Number.isInteger(idx) || idx < 0 || idx >= options.length) return '';
-            chosen = options[idx].value;
-        }
+            const newRow = document.createElement('div');
+            newRow.className = 'ipk_pick_row ipk_pick_new';
+            newRow.innerHTML = '<i class="fa-solid fa-plus"></i>';
+            const newLabel = document.createElement('span');
+            newLabel.textContent = t('pack.createNew');
+            newRow.appendChild(newLabel);
+            newRow.addEventListener('click', () => finish(NEW));
+            list.appendChild(newRow);
 
-        if (chosen === NEW) {
+            box.appendChild(list);
+
+            const cancel = document.createElement('div');
+            cancel.className = 'ipk_btn ipk_pick_cancel';
+            cancel.textContent = t('btn.cancel');
+            cancel.addEventListener('click', () => finish(''));
+            box.appendChild(cancel);
+
+            back.appendChild(box);
+            back.addEventListener('click', (e) => {
+                if (e.target === back) finish('');
+            });
+            document.addEventListener('keydown', onKey, true);
+
+            // Mount inside our own modal so it stacks above it correctly.
+            (state.modal || document.body).appendChild(back);
+        }).then(async (chosen) => {
+            if (chosen !== NEW) return chosen;
             const name = await promptText(t('prompt.newPack'), t('pack.newDefault'));
             if (!name) return '';
             const p = {
@@ -1359,8 +1395,7 @@
             await dbPutPack(p);
             await refreshPacks();
             return p.id;
-        }
-        return chosen;
+        });
     }
 
     async function onDeleteSelected() {

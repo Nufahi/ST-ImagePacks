@@ -8,6 +8,7 @@
     "pack.newDefault": "New pack",
     "pack.createNew": "+ New pack…",
     "btn.close": "Close",
+    "btn.cancel": "Cancel",
     "btn.newPack": "New pack",
     "btn.renamePack": "Rename pack",
     "btn.deletePack": "Delete pack",
