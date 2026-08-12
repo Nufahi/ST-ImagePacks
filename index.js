@@ -544,6 +544,39 @@
         return cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0';
     }
 
+    /**
+     * Is there a folded-away container between the field and this candidate?
+     *
+     * The input itself being hidden means nothing — that's the normal shape,
+     * the host opens it from script. What matters is a hidden element BETWEEN
+     * the input and the candidate anchor, because that means the slot is not on
+     * screen while the candidate is: they are two different things, and the
+     * badge would land on whatever the candidate happens to be.
+     *
+     * This is exactly how the badge ended up on the wallpaper icon in the top
+     * bar. ST keeps the background upload inside a drawer:
+     *
+     *     #logo_block.drawer          ← closed, its box IS the top bar icon
+     *     ├── .drawer-toggle          ← the wallpaper button you see
+     *     └── #Backgrounds  display:none
+     *             └── <input type="file" accept="image/*">
+     *
+     * Climbing past `#Backgrounds` finds `#logo_block`, which is visible, is
+     * icon-sized and reads as clickable — so it passed every test and got the
+     * badge, while the actual upload slot was still folded away. Now the hidden
+     * drawer content is a hard boundary, and the field is picked up by a later
+     * scan once the drawer is really open.
+     */
+    function hiddenBetween(input, candidate) {
+        let p = input.parentElement;
+        while (p && p !== candidate && p !== document.body) {
+            const cs = getComputedStyle(p);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+            p = p.parentElement;
+        }
+        return false;
+    }
+
     /** One upload slot, not a panel and not the page. */
     function isSaneSize(el) {
         const r = rectOf(el);
@@ -574,11 +607,31 @@
      *  the DOM but never renders it. */
     const VOID_ANCHOR_RE = /^(IMG|INPUT|CANVAS|VIDEO|IFRAME|SVG|BR|HR|TEXTAREA|SELECT)$/;
 
+    /* ST's own furniture: the handle you click to open a panel, and the panel
+     * element itself. Neither is ever an upload slot — they're the lid, not the
+     * box — even though a closed drawer measures exactly like a nice little
+     * clickable tile, which is precisely what fooled the old code.
+     *
+     * Only the handle is matched by ancestry (nothing inside a toggle is a
+     * slot). The wrappers are matched on the element itself, never on
+     * ancestors: the genuine background and avatar slots live INSIDE
+     * `.drawer-content` under `#top-settings-holder`, so excluding those by
+     * ancestry would throw out every field worth hooking. */
+    const CHROME_ANCESTRY = '.drawer-toggle, .drawer-icon, #leftNavDrawerIcon, #rightNavDrawerIcon';
+    const CHROME_SELF = '#top-bar, #top-settings-holder, #sheld, #form_sheld, .drawer, .drawer-content';
+
+    function isChrome(el) {
+        try {
+            return !!el.closest(CHROME_ANCESTRY) || el.matches(CHROME_SELF);
+        } catch (e) { return false; }
+    }
+
     function isUsableAnchor(el) {
         return el instanceof Element
             && el !== document.body
             && el !== document.documentElement
             && !VOID_ANCHOR_RE.test(el.tagName)
+            && !isChrome(el)
             && isVisible(el)
             && isSaneSize(el)
             && looksClickable(el);
@@ -608,7 +661,7 @@
         // The sibling is what the user clicks, so it gets first refusal before
         // any container does.
         for (const sib of input.parentElement?.children || []) {
-            if (sib !== input && isUsableAnchor(sib)) candidates.push(sib);
+            if (sib !== input) candidates.push(sib);
         }
 
         // Then walk a little way up: hosts commonly hide the input inside the
@@ -619,6 +672,9 @@
         }
 
         for (const c of candidates) {
+            // A candidate on the far side of a folded-away container is not
+            // this field's slot, whatever it looks like.
+            if (hiddenBetween(input, c)) continue;
             if (isUsableAnchor(c)) return c;
         }
         return null;
