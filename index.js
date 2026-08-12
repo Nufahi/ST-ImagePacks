@@ -952,6 +952,12 @@
         fab.className = 'ipk_fab';
         fab.title = t('fab.title');
         fab.appendChild(packIcon('ipk-icon'));
+        // Same reasoning as the modal: a tap on the floating button must not
+        // read as "the user clicked the page" and fold an open drawer. Only
+        // `click` is swallowed — the drag below finishes on a document-level
+        // mouseup/touchend, so stopping those here would strand the fab
+        // mid-drag.
+        fab.addEventListener('click', (e) => { e.stopPropagation(); });
         document.body.appendChild(fab);
         restoreFabPos();
 
@@ -1244,6 +1250,29 @@
 
     function bindModal(modal) {
         const d = state.dom;
+
+        /* Keep our clicks to ourselves.
+         *
+         * SillyTavern closes an open drawer when a click lands outside it —
+         * that's how you dismiss the Backgrounds or Persona panel by tapping
+         * the page. The check is a document-level handler asking whether the
+         * click happened inside `.drawer-content`.
+         *
+         * Our modal is mounted on <body>, so every click in it — picking a
+         * picture, switching packs, even hitting Cancel — reads as "outside"
+         * and folds the very drawer the user is working in. You'd apply an
+         * image and get thrown back to the chat.
+         *
+         * Stopping propagation at the modal root fixes it at the source: the
+         * document handler never sees the event, so the drawer stays exactly
+         * as it was, and inserting from a pack behaves like picking a file
+         * through the OS dialog. Our own handlers are bound to elements inside
+         * the modal, so they've already run by the time the event gets here,
+         * and nothing calls preventDefault, so typing and text selection in
+         * the search box are untouched. */
+        for (const evt of ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend']) {
+            modal.addEventListener(evt, (e) => { e.stopPropagation(); });
+        }
 
         modal.querySelectorAll('[data-ipk-close]').forEach((el) => {
             el.addEventListener('click', closeModal);
