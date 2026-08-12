@@ -1,6 +1,5 @@
 {
     "app": "Image Packs",
-    "wand.title": "Open the Image Packs manager",
     "slash.help": "Open the Image Packs manager",
     "hook.title": "Insert from an image pack",
     "fab.title": "Tap: show insert buttons · Hold: open manager · Drag to move",
@@ -53,6 +52,9 @@
     "toast.revealOn": "Tap a highlighted button next to an image field",
     "err.datatransfer": "This browser refused the file injection",
     "err.inputGone": "The target field no longer exists on the page",
+    "set.intro": "Reusable image libraries you can push into any image upload field on the page.",
+    "set.sectionButtons": "Insert buttons",
+    "set.sectionLibrary": "Library",
     "set.enabled": "Enable Image Packs",
     "set.showButtons": "Show the insert button next to image fields",
     "set.revealMode": "When to show the insert buttons",

@@ -45,6 +45,23 @@ body.ipk_modal_open {
     transform: scale(1.08);
 }
 
+/* The mark scales with the button it sits in — one glyph, every size. */
+.ipk_hook_btn .ipk-icon,
+.ipk_fab .ipk-icon {
+    width: 1.2em;
+    height: 1.2em;
+}
+
+.ipk_title_mark {
+    display: inline-flex;
+    align-items: center;
+}
+
+.ipk_title_mark .ipk-icon {
+    width: 1.2em;
+    height: 1.2em;
+}
+
 /* ---------- Reveal mode ----------
  * In reveal mode the hook buttons are hidden entirely until the user taps the
  * floating button. That keeps phones clean: no stray icons covering the host
@@ -540,15 +557,156 @@ body.ipk_modal_open .ipk_fab {
     justify-content: center;
 }
 
-/* ---------- Settings panel ---------- */
-#ipk_settings .ipk_note {
-    display: block;
-    margin: 4px 0 8px;
-    opacity: 0.65;
+/* ============================================================
+ * SETTINGS CARD (Extensions tab) — rounded card, inline SVG mark
+ *
+ * The whole card is built out of ST's own theme variables, with a couple of
+ * locals so the rules below don't repeat the same four-level fallback chain.
+ * ============================================================ */
+.ipk-settings {
+    --ipk-accent: var(--SmartThemeQuoteColor, #4a7ab8);
+    --ipk-border: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.13));
+    --ipk-surface: rgba(255, 255, 255, 0.035);
+    --ipk-surface-strong: rgba(255, 255, 255, 0.06);
+    --ipk-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #e0e0e0) 65%, transparent);
 }
 
-#ipk_settings #ipk_set_maxside {
-    width: 120px;
+/* The mark sits on the drawer title next to the name. */
+.ipk-settings .inline-drawer-header b {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.ipk-settings__mark {
+    display: inline-flex;
+    color: inherit;
+}
+
+.ipk-icon {
+    width: 1.15em;
+    height: 1.15em;
+}
+
+.ipk-settings__card {
+    padding: 14px;
+    margin-top: 6px;
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--ipk-accent) 9%, transparent) 0%, transparent 22%),
+        var(--ipk-surface);
+    border: 1px solid var(--ipk-border);
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.ipk-settings__intro {
+    margin: 0 0 12px;
+    font-size: 0.84em;
+    line-height: 1.5;
+    color: var(--ipk-muted);
+}
+
+.ipk-settings__primary {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 10px 14px;
+    margin: 0 0 6px;
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--ipk-accent);
+    white-space: nowrap;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--ipk-accent) 14%, transparent);
+    border: 1px solid var(--ipk-accent);
+    border-radius: 999px;
+    transition: background 0.15s ease, transform 0.08s ease;
+}
+
+.ipk-settings__primary:hover {
+    background: color-mix(in srgb, var(--ipk-accent) 26%, transparent);
+}
+
+.ipk-settings__primary:active {
+    transform: scale(0.98);
+}
+
+.ipk-settings__heading {
+    margin: 14px 0 6px;
+    font-size: 0.72em;
+    font-weight: 700;
+    color: var(--ipk-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.ipk-settings__row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    margin: 0 0 6px;
+    cursor: pointer;
+    background: var(--ipk-surface-strong);
+    border: 1px solid var(--ipk-border);
+    border-radius: 10px;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ipk-settings__row:hover {
+    border-color: color-mix(in srgb, var(--ipk-accent) 40%, var(--ipk-border) 60%);
+}
+
+.ipk-settings__row--col {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    cursor: default;
+}
+
+.ipk-settings__text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    margin: 0;
+}
+
+.ipk-settings__label {
+    font-size: 0.9em;
+}
+
+.ipk-settings__desc {
+    font-size: 0.78em;
+    line-height: 1.45;
+    color: var(--ipk-muted);
+}
+
+.ipk-settings__row input[type="checkbox"] {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.ipk-settings__row .text_pole {
+    width: 100%;
+    height: auto;
+    margin: 0;
+    border-radius: 8px;
+}
+
+.ipk-settings__row #ipk_set_maxside {
+    width: 130px;
+}
+
+.ipk-settings__foot {
+    margin: 12px 0 0;
+    font-size: 0.76em;
+    line-height: 1.5;
+    color: var(--ipk-muted);
 }
 
 /* ---------- Mobile ---------- */

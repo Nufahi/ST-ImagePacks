@@ -9,7 +9,11 @@
  *   1. You load files (or a whole folder) into a pack once. Images live in
  *      IndexedDB as Blobs, so settings.json never gets bloated.
  *   2. The extension watches the DOM for <input type="file"> elements that
- *      accept images and attaches a small 📚 button next to each one.
+ *      accept images and attaches a small badge to the thing you'd click to
+ *      change that picture — the thumbnail, the avatar, the upload button.
+ *      Fields that only *might* be images, and containers that aren't really
+ *      clickable, are left alone: a badge in a random corner is worse than no
+ *      badge at all.
  *   3. Clicking that button opens the picker. Selected images are converted
  *      back into File objects, stuffed into the input via DataTransfer and a
  *      synthetic `change`/`input` event is dispatched — exactly as if you had
@@ -103,6 +107,62 @@
             return t('count.images.many', { count: n });
         }
         return t(n === 1 ? 'count.images.one' : 'count.images.many', { count: n });
+    }
+
+    /* ============================================================
+     * Brand mark (inline SVG)
+     *
+     * Font Awesome is deliberately not used for the extension's own face: the
+     * glyph set differs between the icon packs ST themes ship with, and the
+     * drawer header ends up wearing a different picture than the buttons. The
+     * mark is a solid silhouette painted with `currentColor`, so it inherits
+     * the theme's text colour instead of fighting it, and cut-outs are holes
+     * in the same path resolved by `fill-rule="evenodd"`.
+     * ============================================================ */
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    /** Two stacked photos — the Image Packs mark. */
+    const MARK_PATHS = [
+        // Sheet peeking out behind: an L of the top and right edges only, so it
+        // reads as a second photo in the stack. Outer radius = inner radius +
+        // sheet thickness (1.2 + 1.7), both arcs sharing a centre at
+        // (19.2, 5.1), which is what keeps the corner an even thickness.
+        'M8 2.2 H19.2 A2.9 2.9 0 0 1 22.1 5.1 V16.2 H20.4 V5.1'
+        + ' A1.2 1.2 0 0 0 19.2 3.9 H8 Z',
+        // Front photo, with the sun and the mountains punched out.
+        'M5.2 4.2 H17.2 A2.2 2.2 0 0 1 19.4 6.4 V19 A2.2 2.2 0 0 1 17.2 21.2'
+        + ' H5.2 A2.2 2.2 0 0 1 3 19 V6.4 A2.2 2.2 0 0 1 5.2 4.2 Z'
+        + ' M12 8.8 A1.4 1.4 0 1 0 14.8 8.8 A1.4 1.4 0 1 0 12 8.8 Z'
+        + ' M5.4 19.2 L9.8 12.6 L12.4 16.5 L13.9 14.4 L17.4 19.2 Z',
+    ];
+
+    /**
+     * @param {string} [className]
+     * @returns {SVGSVGElement} the Image Packs mark.
+     */
+    function packIcon(className = 'ipk-icon') {
+        const svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'currentColor');
+        svg.setAttribute('fill-rule', 'evenodd');
+        svg.setAttribute('clip-rule', 'evenodd');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('focusable', 'false');
+        if (className) svg.setAttribute('class', className);
+        for (const d of MARK_PATHS) {
+            const path = document.createElementNS(SVG_NS, 'path');
+            path.setAttribute('d', d);
+            svg.appendChild(path);
+        }
+        return svg;
+    }
+
+    /** Fill every `[data-ipk-icon]` placeholder in a subtree — used by markup
+     *  built from a template string, which cannot carry a live node. */
+    function paintIcons(root) {
+        for (const slot of root.querySelectorAll('[data-ipk-icon]')) {
+            slot.replaceChildren(packIcon());
+        }
     }
 
     /* ============================================================
@@ -407,30 +467,161 @@
     const BTN_CLASS = 'ipk_hook_btn';
     const HOOKED_ATTR = 'data-ipk-hooked';
 
-    /** Does this input want images? Accept an empty accept="" too — plenty of
-     *  extensions omit it — but skip obvious non-image pickers (json/png cards
-     *  are fine, .json-only imports are not). */
+    /** Words that mark a field as image-ish when `accept` is missing. */
+    const IMAGE_HINT_RE = /(image|img|picture|photo|avatar|portrait|sprite|thumb|thumbnail|gallery|background|\bbg\b|banner|cover|wallpaper|icon|logo|emoji|sticker|expression|reference|upload_?pic|pic\b)/i;
+    /** ...and words that mark it as something else entirely. */
+    const NON_IMAGE_HINT_RE = /(json|yaml|yml|csv|txt|zip|preset|lorebook|worldinfo|world_?info|world-?book|settings|theme|backup|import_?chat|chat_?import|jsonl|audio|voice|sound|video|font|\.st\b|script|regex|persona_?import)/i;
+
+    /** Does this input want images?
+     *
+     *  `accept` decides when it's there. When it isn't — plenty of extensions
+     *  omit it — we do NOT assume images: a bare `<input type="file">` is just
+     *  as likely to be a character card, a preset or a lorebook import, and
+     *  hanging our button on those is exactly the "why is this here?" bug. In
+     *  that case the surrounding names have to actually say "image". */
     function isImageInput(input) {
         if (!(input instanceof HTMLInputElement)) return false;
         if (input.type !== 'file') return false;
+        // Our own manager has file inputs too; badging them would be silly.
+        if (input.id?.startsWith('ipk_') || input.closest('.ipk_modal')) return false;
+        // A folder picker can't take a DataTransfer file list meaningfully.
+        if (input.hasAttribute('webkitdirectory')) return false;
+
         const accept = (input.getAttribute('accept') || '').toLowerCase().trim();
-        if (!accept) return true;
-        if (accept.includes('image/')) return true;
-        return /\.(png|jpe?g|webp|gif|avif|bmp)\b/.test(accept);
+        if (accept) {
+            // An importer that takes .json AND .png is a character-card field,
+            // not a picture slot — the PNG there is a container, and dropping a
+            // pack image into it just produces a broken card.
+            if (/\.(json|charx|yaml|yml|zip|jsonl)\b/.test(accept)) return false;
+            if (accept.includes('image/')) return true;
+            if (/\.(png|jpe?g|webp|gif|avif|bmp)\b/.test(accept)) return true;
+            return false;
+        }
+
+        // No accept — judge by the words around the field.
+        const text = [
+            input.id, input.name, input.className,
+            input.getAttribute('aria-label'), input.title,
+            input.closest('label')?.textContent,
+            input.parentElement?.id, input.parentElement?.className,
+            input.parentElement?.parentElement?.id,
+        ].filter((v) => typeof v === 'string').join(' ').slice(0, 400);
+
+        if (NON_IMAGE_HINT_RE.test(text)) return false;
+        return IMAGE_HINT_RE.test(text);
     }
 
-    /** The visible element the user actually clicks. Hidden inputs are the norm
-     *  (label-wrapped or JS-triggered), so anchor our button to something the
-     *  user can see: the wrapping <label>, or the input's parent. */
+    /* ------------------------------------------------------------
+     * Anchor picking
+     *
+     * The button must land on the thing the user would click to change the
+     * picture — a thumbnail, an avatar, an "upload" button — and nowhere else.
+     * An anchor therefore has to be:
+     *   · on screen (a hidden panel gets no button, and gets retried later),
+     *   · big enough to hold a 22px badge without covering everything,
+     *   · small enough to be one slot rather than a whole panel or a
+     *     page-sized drop zone,
+     *   · clickable in the first place (a <label>, a button, or anything the
+     *     host styled with cursor:pointer).
+     * If nothing in the input's immediate ancestry qualifies, we hook nothing.
+     * That's deliberate: a stray badge in the corner of a random <div> is
+     * worse than no badge at all.
+     * ------------------------------------------------------------ */
+    const ANCHOR_MIN_SIDE = 22;      // px — smaller than the badge itself
+    const ANCHOR_MAX_VIEWPORT = 0.4; // share of the viewport a slot may cover
+    const ANCHOR_CLIMB = 4;          // ancestors to consider above the input
+
+    function rectOf(el) {
+        try { return el.getBoundingClientRect(); } catch (e) { return null; }
+    }
+
+    /** On screen and actually painted? */
+    function isVisible(el) {
+        if (!(el instanceof Element) || !el.isConnected) return false;
+        const r = rectOf(el);
+        if (!r || r.width < 1 || r.height < 1) return false;
+        const cs = getComputedStyle(el);
+        return cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0';
+    }
+
+    /** One upload slot, not a panel and not the page. */
+    function isSaneSize(el) {
+        const r = rectOf(el);
+        if (!r) return false;
+        if (r.width < ANCHOR_MIN_SIDE || r.height < ANCHOR_MIN_SIDE) return false;
+        const viewport = (window.innerWidth || 1) * (window.innerHeight || 1);
+        return (r.width * r.height) <= viewport * ANCHOR_MAX_VIEWPORT;
+    }
+
+    /** Names hosts give to the thing you click to change a picture. */
+    const CLICKABLE_HINT_RE = /(\bbutton\b|_button|btn|upload|drop|avatar|thumb|preview|image|img|slot|tile|card|gallery|picture|photo)/i;
+
+    /** Would a user read this element as "click me"? */
+    function looksClickable(el) {
+        if (!(el instanceof Element)) return false;
+        const tag = el.tagName;
+        if (tag === 'LABEL' || tag === 'BUTTON' || tag === 'A') return true;
+        if (el.getAttribute('role') === 'button') return true;
+        if (el.hasAttribute('onclick')) return true;
+        // A slot that shows the current picture is the natural place to change it.
+        if (el.querySelector(':scope > img')) return true;
+        const names = `${el.id || ''} ${typeof el.className === 'string' ? el.className : ''}`;
+        if (CLICKABLE_HINT_RE.test(names)) return true;
+        try { return getComputedStyle(el).cursor === 'pointer'; } catch (e) { return false; }
+    }
+
+    /** Elements that can't hold a child badge — an <img> accepts appendChild in
+     *  the DOM but never renders it. */
+    const VOID_ANCHOR_RE = /^(IMG|INPUT|CANVAS|VIDEO|IFRAME|SVG|BR|HR|TEXTAREA|SELECT)$/;
+
+    function isUsableAnchor(el) {
+        return el instanceof Element
+            && el !== document.body
+            && el !== document.documentElement
+            && !VOID_ANCHOR_RE.test(el.tagName)
+            && isVisible(el)
+            && isSaneSize(el)
+            && looksClickable(el);
+    }
+
+    /**
+     * The visible element the user actually clicks, or null when the field has
+     * no sensible place to put a button.
+     * @returns {Element|null}
+     */
     function anchorFor(input) {
+        const candidates = [];
+
         const label = input.closest('label');
-        if (label) return label;
+        if (label) candidates.push(label);
         if (input.id) {
-            const forLabel = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
-            if (forLabel) return forLabel;
+            try {
+                const forLabel = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+                if (forLabel) candidates.push(forLabel);
+            } catch (e) { /* malformed id */ }
         }
-        const p = input.parentElement;
-        return p && p !== document.body ? p : input;
+        // A rendered (not hidden) file input can be badged through its wrapper.
+        if (isVisible(input) && input.parentElement) candidates.push(input.parentElement);
+
+        // The very common ST shape is a hidden input sitting next to the
+        // preview it fills (`avatar_upload_file` beside `avatar_load_preview`).
+        // The sibling is what the user clicks, so it gets first refusal before
+        // any container does.
+        for (const sib of input.parentElement?.children || []) {
+            if (sib !== input && isUsableAnchor(sib)) candidates.push(sib);
+        }
+
+        // Then walk a little way up: hosts commonly hide the input inside the
+        // thumbnail div that carries the click handler.
+        let el = input.parentElement;
+        for (let i = 0; el && i < ANCHOR_CLIMB; i++, el = el.parentElement) {
+            candidates.push(el);
+        }
+
+        for (const c of candidates) {
+            if (isUsableAnchor(c)) return c;
+        }
+        return null;
     }
 
     /* ------------------------------------------------------------
@@ -478,35 +669,44 @@
     }
 
     /** Pick the anchor with the largest on-screen area — that's the thumbnail
-     *  rather than the small "upload" button. */
+     *  rather than the small "upload" button. Inputs with no usable anchor are
+     *  skipped entirely rather than falling back to "some parent". */
     function bestAnchor(inputs) {
         let best = null;
         let bestArea = -1;
         for (const i of inputs) {
             const a = anchorFor(i);
-            if (!a || a === document.body) continue;
+            if (!a) continue;
             const area = visibleArea(a);
             if (area > bestArea) { bestArea = area; best = { anchor: a, input: i }; }
         }
         return best;
     }
 
+    /** @returns {boolean} whether a button was actually mounted. */
     function hookInput(input, forcedAnchor) {
-        if (!settings().showButtons) return;
-        if (input.getAttribute(HOOKED_ATTR) === '1') return;
-        input.setAttribute(HOOKED_ATTR, '1');
+        if (!settings().showButtons) return false;
+        if (input.getAttribute(HOOKED_ATTR) === '1') return false;
 
         const anchor = forcedAnchor || anchorFor(input);
-        if (!anchor || anchor === document.body) return;
-        // Don't double up if this anchor already carries a button.
-        if (anchor.querySelector(`:scope > .${BTN_CLASS}`)) return;
+        // No sane place for the badge — leave the field alone. A later scan
+        // retries it, which matters for panels that are still hidden now.
+        if (!isUsableAnchor(anchor)) return false;
+        input.setAttribute(HOOKED_ATTR, '1');
+        // Don't double up if this anchor already carries a button — the field
+        // is covered either way, so this counts as hooked.
+        const existing = anchor.querySelector(`:scope > .${BTN_CLASS}`);
+        if (existing) {
+            input.__ipkButton = existing;
+            return true;
+        }
 
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = `${BTN_CLASS} interactable`;
         btn.title = t('hook.title');
         btn.setAttribute('aria-label', t('hook.title'));
-        btn.innerHTML = '<i class="fa-solid fa-images"></i>';
+        btn.appendChild(packIcon('ipk-icon'));
 
         btn.addEventListener('click', (e) => {
             // Critical: the anchor is usually a <label> that opens the OS file
@@ -531,6 +731,30 @@
         anchor.classList.add('ipk_anchor');
         anchor.appendChild(btn);
         input.__ipkButton = btn;
+        return true;
+    }
+
+    /* Retrying a skipped field.
+     *
+     * A field can be legitimately unhookable *right now*: the panel holding it
+     * is collapsed, or the browser hasn't laid it out yet, so it measures 0x0
+     * and fails the anchor checks. A short, bounded retry catches those. The
+     * budget is only refilled when a genuinely new unhooked field turns up —
+     * otherwise the chat's constant re-rendering would refill it forever and
+     * leave a 900ms timer running for the rest of the session over a field
+     * that will never qualify. */
+    const RETRY_LIMIT = 6;
+    let retryTimer = null;
+    let retriesLeft = RETRY_LIMIT;
+    let lastPending = 0;
+
+    function scheduleRetry() {
+        if (retryTimer || retriesLeft <= 0) return;
+        retriesLeft--;
+        retryTimer = setTimeout(() => {
+            retryTimer = null;
+            scanInputs(document);
+        }, 900);
     }
 
     function scanInputs(root) {
@@ -554,14 +778,20 @@
         // Bucket inputs by their shared slot container. Ungrouped inputs get
         // their own bucket keyed by the element itself.
         const groups = new Map();
+        let pending = 0;
         for (const i of inputs) {
             if (i.getAttribute(HOOKED_ATTR) === '1') continue;
+            pending++;
             let key;
             try { key = slotContainerFor(i) || i; } catch (e) { key = i; }
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(i);
         }
+        // More unhooked fields than last time means the page really did change.
+        if (pending > lastPending) retriesLeft = RETRY_LIMIT;
+        lastPending = pending;
 
+        let skipped = 0;
         for (const [key, list] of groups) {
             try {
                 // Slot already has a button from an earlier pass — just mark
@@ -570,11 +800,16 @@
                     for (const i of list) i.setAttribute(HOOKED_ATTR, '1');
                     continue;
                 }
-                const pick = bestAnchor(list) || { anchor: null, input: list[0] };
+                const pick = bestAnchor(list);
+                // Nothing in this slot offers a clickable, visible target —
+                // most often because the panel is still collapsed. Leave the
+                // inputs unmarked so a later pass can pick them up.
+                if (!pick) { skipped++; continue; }
+
                 if (key instanceof Element && list.length > 1) {
                     key.setAttribute(GROUP_ATTR, '1');
                 }
-                hookInput(pick.input, pick.anchor);
+                if (!hookInput(pick.input, pick.anchor)) { skipped++; continue; }
                 // Everything else in the slot is covered by that one button.
                 // They share the reference so a re-render that kills the button
                 // un-marks the whole group, not just the one input.
@@ -586,12 +821,20 @@
                 console.warn(`${LOG} hook failed`, e);
             }
         }
+
+        // Panels are frequently laid out a frame or two after they're inserted,
+        // and drawers open with no DOM mutation at all — a fresh scan then sees
+        // sizes it couldn't measure before. Retry a bounded number of times so
+        // late-arriving slots still get their button, without a permanent timer.
+        if (skipped) scheduleRetry();
     }
 
     function removeAllButtons() {
         document.querySelectorAll(`.${BTN_CLASS}`).forEach((b) => b.remove());
         document.querySelectorAll(`[${HOOKED_ATTR}]`).forEach((i) => i.removeAttribute(HOOKED_ATTR));
         document.querySelectorAll(`[${GROUP_ATTR}]`).forEach((i) => i.removeAttribute(GROUP_ATTR));
+        document.querySelectorAll('.ipk_anchor').forEach((a) => a.classList.remove('ipk_anchor', 'ipk_anchor_rel'));
+        lastPending = 0;
     }
 
     /* ============================================================
@@ -652,7 +895,7 @@
         fab.id = 'ipk_fab';
         fab.className = 'ipk_fab';
         fab.title = t('fab.title');
-        fab.innerHTML = '<i class="fa-solid fa-images"></i>';
+        fab.appendChild(packIcon('ipk-icon'));
         document.body.appendChild(fab);
         restoreFabPos();
 
@@ -761,6 +1004,8 @@
     function stopObserver() {
         observer?.disconnect();
         observer = null;
+        clearTimeout(retryTimer);
+        retryTimer = null;
     }
 
     /* ============================================================
@@ -810,7 +1055,7 @@
             <div class="ipk_panel">
                 <div class="ipk_header">
                     <div class="ipk_title">
-                        <i class="fa-solid fa-images"></i>
+                        <span class="ipk_title_mark" data-ipk-icon></span>
                         <span data-i18n="app"></span>
                     </div>
                     <div class="ipk_target" id="ipk_target_hint"></div>
@@ -883,6 +1128,7 @@
             </div>`;
 
         document.body.appendChild(modal);
+        paintIcons(modal);
         i18nApplyDom(modal);
 
         const $ = (id) => modal.querySelector(`#${id}`);
@@ -1503,49 +1749,13 @@
     }
 
     /* ============================================================
-     * Wand menu button
-     * ============================================================ */
-    function addWandButton() {
-        const container = document.getElementById('gallery_wand_container')
-            || document.getElementById('extensionsMenu');
-        if (!(container instanceof HTMLElement)) return false;
-        if (document.getElementById('ipk_wand_button')) return true;
-
-        const btn = document.createElement('div');
-        btn.id = 'ipk_wand_button';
-        btn.classList.add('list-group-item', 'flex-container', 'flexGap5', 'interactable');
-        btn.tabIndex = 0;
-        btn.setAttribute('role', 'button');
-        btn.style.cursor = 'pointer';
-        btn.title = t('wand.title');
-
-        const icon = document.createElement('div');
-        icon.classList.add('fa-solid', 'fa-images', 'extensionsMenuExtensionButton');
-        const text = document.createElement('span');
-        text.textContent = t('app');
-        btn.append(icon, text);
-
-        // Touch devices can fire both touchend and a synthetic click.
-        let lastFire = 0;
-        const activate = (e) => {
-            // Only preventDefault — letting the click bubble is what allows ST
-            // to auto-close the wand dropdown.
-            e.preventDefault();
-            const now = Date.now();
-            if (now - lastFire < 400) return;
-            lastFire = now;
-            openManager();
-            try { document.getElementById('extensionsMenu')?.style.setProperty('display', 'none'); } catch (err) { /* ignore */ }
-        };
-        btn.addEventListener('click', activate);
-        btn.addEventListener('touchend', activate, { passive: false });
-
-        container.appendChild(btn);
-        return true;
-    }
-
-    /* ============================================================
      * Settings panel (Extensions tab)
+     *
+     * This is the extension's only permanent entry point. There is no wand
+     * menu item: the wand is for things you fire off mid-chat, while packs are
+     * pushed into a field from the button that sits on the field itself, so an
+     * extra row in an already crowded menu bought nothing. The manager is
+     * still reachable from here, from /image-packs and from window.STImagePacks.
      * ============================================================ */
     function addSettingsPanel() {
         const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
@@ -1554,43 +1764,75 @@
         const s = settings();
         const wrap = document.createElement('div');
         wrap.id = 'ipk_settings';
+        // The drawer title stays in English on purpose — it's the extension's
+        // name in the Extensions list, same as every other entry there.
+        wrap.className = 'ipk-settings';
         wrap.innerHTML = `
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b data-i18n="app"></b>
+                    <b><span class="ipk-settings__mark" data-ipk-icon></span> Image Packs</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
-                    <label class="checkbox_label">
-                        <input type="checkbox" id="ipk_set_enabled">
-                        <span data-i18n="set.enabled"></span>
-                    </label>
-                    <label class="checkbox_label">
-                        <input type="checkbox" id="ipk_set_buttons">
-                        <span data-i18n="set.showButtons"></span>
-                    </label>
-                    <label for="ipk_set_reveal" data-i18n="set.revealMode"></label>
-                    <select id="ipk_set_reveal" class="text_pole">
-                        <option value="auto" data-i18n="set.reveal.auto"></option>
-                        <option value="tap" data-i18n="set.reveal.tap"></option>
-                        <option value="always" data-i18n="set.reveal.always"></option>
-                    </select>
-                    <small class="ipk_note" data-i18n="set.revealHint"></small>
-                    <label class="checkbox_label">
-                        <input type="checkbox" id="ipk_set_remember">
-                        <span data-i18n="set.rememberPack"></span>
-                    </label>
-                    <label for="ipk_set_maxside" data-i18n="set.maxSide"></label>
-                    <input type="number" id="ipk_set_maxside" class="text_pole" min="0" max="4096" step="128">
-                    <small class="ipk_note" data-i18n="set.maxSideHint"></small>
-                    <div class="menu_button menu_button_icon" id="ipk_set_open">
-                        <i class="fa-solid fa-images"></i>
-                        <span data-i18n="set.openManager"></span>
+                    <div class="ipk-settings__card">
+                        <p class="ipk-settings__intro" data-i18n="set.intro"></p>
+
+                        <button type="button" class="ipk-settings__primary" id="ipk_set_open">
+                            <span class="ipk-settings__mark" data-ipk-icon></span>
+                            <span data-i18n="set.openManager"></span>
+                        </button>
+
+                        <h4 class="ipk-settings__heading" data-i18n="set.sectionButtons"></h4>
+
+                        <label class="ipk-settings__row" for="ipk_set_enabled">
+                            <span class="ipk-settings__text">
+                                <span class="ipk-settings__label" data-i18n="set.enabled"></span>
+                            </span>
+                            <input type="checkbox" id="ipk_set_enabled">
+                        </label>
+
+                        <label class="ipk-settings__row" for="ipk_set_buttons">
+                            <span class="ipk-settings__text">
+                                <span class="ipk-settings__label" data-i18n="set.showButtons"></span>
+                            </span>
+                            <input type="checkbox" id="ipk_set_buttons">
+                        </label>
+
+                        <div class="ipk-settings__row ipk-settings__row--col">
+                            <label class="ipk-settings__text" for="ipk_set_reveal">
+                                <span class="ipk-settings__label" data-i18n="set.revealMode"></span>
+                                <span class="ipk-settings__desc" data-i18n="set.revealHint"></span>
+                            </label>
+                            <select id="ipk_set_reveal" class="text_pole">
+                                <option value="auto" data-i18n="set.reveal.auto"></option>
+                                <option value="tap" data-i18n="set.reveal.tap"></option>
+                                <option value="always" data-i18n="set.reveal.always"></option>
+                            </select>
+                        </div>
+
+                        <h4 class="ipk-settings__heading" data-i18n="set.sectionLibrary"></h4>
+
+                        <label class="ipk-settings__row" for="ipk_set_remember">
+                            <span class="ipk-settings__text">
+                                <span class="ipk-settings__label" data-i18n="set.rememberPack"></span>
+                            </span>
+                            <input type="checkbox" id="ipk_set_remember">
+                        </label>
+
+                        <div class="ipk-settings__row ipk-settings__row--col">
+                            <label class="ipk-settings__text" for="ipk_set_maxside">
+                                <span class="ipk-settings__label" data-i18n="set.maxSide"></span>
+                                <span class="ipk-settings__desc" data-i18n="set.maxSideHint"></span>
+                            </label>
+                            <input type="number" id="ipk_set_maxside" class="text_pole" min="0" max="4096" step="128">
+                        </div>
+
+                        <p class="ipk-settings__foot" data-i18n="set.help"></p>
                     </div>
-                    <small class="ipk_note" data-i18n="set.help"></small>
                 </div>
             </div>`;
         host.appendChild(wrap);
+        paintIcons(wrap);
         i18nApplyDom(wrap);
 
         const enabled = wrap.querySelector('#ipk_set_enabled');
@@ -1662,15 +1904,12 @@
 
         settings(); // materialize defaults
 
-        // Wand button and settings panel may not exist yet — retry briefly.
+        // The Extensions panel may not exist yet — retry briefly.
         let tries = 0;
         const timer = setInterval(() => {
             tries++;
-            const a = addWandButton();
-            const b = addSettingsPanel();
-            if ((a && b) || tries > 40) clearInterval(timer);
+            if (addSettingsPanel() || tries > 40) clearInterval(timer);
         }, 500);
-        addWandButton();
         addSettingsPanel();
 
         applyEnabled();
