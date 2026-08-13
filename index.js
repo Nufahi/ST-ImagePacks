@@ -700,6 +700,56 @@
         return Array.from(el.querySelectorAll('input[type="file"]')).filter(isImageInput);
     }
 
+    /**
+     * A grid of slots is NOT one slot.
+     *
+     * Merging only makes sense when several inputs drive the SAME picture (the
+     * "Upload" button and the thumbnail overlay of one reference card). It is
+     * flat-out wrong when the container is a row/grid of independent cards —
+     * notsosillynotsoimages 3.x lays its references out exactly like that:
+     *
+     *     .iig-refs-row.iig-refs-main       ← 2 inputs: {{char}} and {{user}}
+     *     ├── .iig-ref-slot[data-ref-type=char] → label → input[type=file]
+     *     └── .iig-ref-slot[data-ref-type=user] → label → input[type=file]
+     *     .iig-refs-row.iig-refs-npcs       ← 4 inputs: NPC 1..4
+     *
+     * Climbing from the char input finds the row, sees two image inputs, calls
+     * it "one slot" and mounts a single button — so only {{char}} and only one
+     * NPC ever got a badge. The tell is that the inputs sit in *different*
+     * child subtrees of the container: two separate cards, two separate
+     * pictures, two buttons needed.
+     *
+     * @returns {boolean} true when `el` merges genuinely distinct slots.
+     */
+    function mergesDistinctSlots(el, inputs) {
+        // Which direct child of `el` does each input live under?
+        const branches = new Set();
+        for (const i of inputs) {
+            let b = i;
+            while (b.parentElement && b.parentElement !== el) b = b.parentElement;
+            if (b.parentElement === el) branches.add(b);
+        }
+        // All in one branch → we haven't reached a divider yet, keep climbing.
+        if (branches.size < 2) return false;
+
+        // Two branches that EACH own a preview of their own are two pictures,
+        // so they are two slots. One preview plus a bare "Upload" button is
+        // the single-slot shape this grouping exists for, and stays merged.
+        let withPreview = 0;
+        const shapes = new Set();
+        for (const b of branches) {
+            if (b.querySelector('img, canvas, [style*="background-image"]')) withPreview++;
+            const cls = typeof b.className === 'string' ? b.className.trim() : '';
+            shapes.add(`${b.tagName}.${cls}`);
+        }
+        if (withPreview >= 2) return true;
+        // Three or more identical siblings is a repeated card template — a
+        // grid, never one slot. Two is left alone: at that size the far more
+        // common shape really is upload-button + thumbnail of one field.
+        if (shapes.size === 1 && branches.size >= 3) return true;
+        return false;
+    }
+
     /** Nearest ancestor that looks like one upload slot, or null if the input
      *  stands alone. */
     function slotContainerFor(input) {
@@ -710,7 +760,11 @@
             if (found.length > 1) {
                 // Too many inputs means we've climbed past the slot into the
                 // whole panel — don't merge unrelated fields into one button.
-                return found.length <= GROUP_MAX_INPUTS ? el : null;
+                if (found.length > GROUP_MAX_INPUTS) return null;
+                // A row/grid of independent cards is not a slot either: each
+                // card keeps its own button.
+                if (mergesDistinctSlots(el, found)) return null;
+                return el;
             }
             el = el.parentElement;
             depth++;
@@ -1044,8 +1098,44 @@
 
     let observer = null;
     let scanTimer = null;
+    let openWatchers = false;
+
+    function rescanSoon(delay = 250) {
+        clearTimeout(scanTimer);
+        scanTimer = setTimeout(() => scanInputs(document), delay);
+    }
+
+    /* Panels that unfold without touching the DOM.
+     *
+     * A collapsed <details> (notsosillynotsoimages puts every section in one)
+     * and ST's own inline-drawer both keep their content in the tree and just
+     * stop rendering it, so the MutationObserver never fires and the slots
+     * inside never get a button until something unrelated re-renders. Opening
+     * one does fire `toggle`, and drawers are opened by a click on their
+     * header — both are cheap to listen for, and the scan is debounced and
+     * bails out immediately when there's nothing new. */
+    function watchPanelOpens() {
+        if (openWatchers) return;
+        openWatchers = true;
+        // `toggle` doesn't bubble; capture catches it for every <details>.
+        document.addEventListener('toggle', (e) => {
+            if (e.target instanceof Element && e.target.tagName === 'DETAILS' && e.target.open) {
+                retriesLeft = RETRY_LIMIT;
+                rescanSoon(120);
+            }
+        }, true);
+        document.addEventListener('click', (e) => {
+            const t = e.target;
+            if (!(t instanceof Element)) return;
+            if (t.closest('summary, .inline-drawer-toggle, .drawer-toggle, .inline-drawer-header')) {
+                retriesLeft = RETRY_LIMIT;
+                rescanSoon(150);
+            }
+        }, true);
+    }
 
     function startObserver() {
+        watchPanelOpens();
         if (observer) return;
         observer = new MutationObserver((records) => {
             let dirty = false;
@@ -1057,8 +1147,7 @@
             }
             if (!dirty) return;
             // Debounce: ST rerenders the chat constantly, no need to scan per node.
-            clearTimeout(scanTimer);
-            scanTimer = setTimeout(() => scanInputs(document), 250);
+            rescanSoon();
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
