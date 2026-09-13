@@ -633,6 +633,7 @@
             && !VOID_ANCHOR_RE.test(el.tagName)
             && !isChrome(el)
             && isVisible(el)
+            && getComputedStyle(el).pointerEvents !== 'none'
             && isSaneSize(el)
             && looksClickable(el);
     }
@@ -644,6 +645,13 @@
      */
     function anchorFor(input) {
         const candidates = [];
+
+        // Some hosts put a hidden input beside a preview, a decorative icon
+        // and a hover-only upload overlay (notsosilly's beta does this now).
+        // Badge the preview wrapper first: the icon may ignore pointer events,
+        // and nesting our button in the overlay makes it disappear on mouseout.
+        const parent = input.parentElement;
+        if (parent?.querySelector(':scope > img, :scope > canvas')) candidates.push(parent);
 
         const label = input.closest('label');
         if (label) candidates.push(label);
@@ -1058,7 +1066,12 @@
         };
 
         fab.addEventListener('mousedown', onDown);
-        fab.addEventListener('touchstart', onDown, { passive: true });
+        fab.addEventListener('touchstart', (e) => {
+            // Suppress compatibility mouse events: otherwise a tap toggles
+            // reveal on at touchend and straight back off at mouseup.
+            e.preventDefault();
+            onDown(e);
+        }, { passive: false });
         document.addEventListener('mousemove', onMove);
         document.addEventListener('touchmove', onMove, { passive: false });
         document.addEventListener('mouseup', onUp);
