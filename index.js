@@ -381,6 +381,38 @@
         }
     }
 
+    /** One worker per import, with a main-thread fallback for older webviews. */
+    function importProcessor() {
+        let worker = null;
+        try {
+            if (window.Worker && window.OffscreenCanvas && window.createImageBitmap) {
+                worker = new Worker(`/${EXT_PATH}/import-worker.js`);
+            }
+        } catch (e) { /* CSP or unsupported worker: use the fallback below. */ }
+        return {
+            async process(file, maxSide, quality) {
+                if (worker) {
+                    try {
+                        const result = await new Promise((resolve, reject) => {
+                            worker.onmessage = (event) => resolve(event.data);
+                            worker.onerror = (event) => {
+                                event.preventDefault();
+                                reject(new Error('Image worker unavailable'));
+                            };
+                            worker.postMessage({ file, maxSide, quality });
+                        });
+                        if (result) return result;
+                    } catch (e) {
+                        worker.terminate();
+                        worker = null;
+                    }
+                }
+                return processFile(file, maxSide, quality);
+            },
+            close() { worker?.terminate(); worker = null; },
+        };
+    }
+
     /** Blob -> File with a sane name/extension so receivers see a normal upload. */
     function blobToFile(record) {
         const type = record.type || record.blob?.type || 'image/png';
@@ -423,6 +455,23 @@
         urlCache.clear();
     }
 
+    function releaseUrl(id) {
+        const url = urlCache.get(id);
+        if (url) URL.revokeObjectURL(url);
+        urlCache.delete(id);
+    }
+
+    // DOM work must stay on the UI thread. Give it small, cancellable idle
+    // slices instead of competing with chat rendering in one long task.
+    function idleTask(callback) {
+        if (window.requestIdleCallback) {
+            const id = window.requestIdleCallback(callback, { timeout: 500 });
+            return () => window.cancelIdleCallback(id);
+        }
+        const id = setTimeout(callback, 16);
+        return () => clearTimeout(id);
+    }
+
     /* ============================================================
      * THE CORE TRICK — push our stored images into a real <input type="file">.
      *
@@ -457,7 +506,6 @@
         // covers both worlds.
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
-        try { window.jQuery?.(input).trigger('change'); } catch (e) { /* ignore */ }
         return true;
     }
 
@@ -483,7 +531,7 @@
         if (!(input instanceof HTMLInputElement)) return false;
         if (input.type !== 'file') return false;
         // Our own manager has file inputs too; badging them would be silly.
-        if (input.id?.startsWith('ipk_') || input.closest('.ipk_modal')) return false;
+        if (input.id?.startsWith('ipk_') || input.closest('.ipk_modal, #chat')) return false;
         // A folder picker can't take a DataTransfer file list meaningfully.
         if (input.hasAttribute('webkitdirectory')) return false;
 
@@ -865,21 +913,43 @@
     let retryTimer = null;
     let retriesLeft = RETRY_LIMIT;
     let lastPending = 0;
+    const knownInputs = new Set();
+
+    function collectInputs(root) {
+        if (root instanceof HTMLInputElement && root.type === 'file' && !root.closest('.ipk_modal, #chat')) knownInputs.add(root);
+        for (const input of root.querySelectorAll?.('input[type="file"]') || []) {
+            if (!input.closest('.ipk_modal, #chat')) knownInputs.add(input);
+        }
+    }
 
     function scheduleRetry() {
         if (retryTimer || retriesLeft <= 0) return;
         retriesLeft--;
         retryTimer = setTimeout(() => {
             retryTimer = null;
-            scanInputs(document);
+            rescanSoon(0);
         }, 900);
     }
 
     function scanInputs(root) {
-        if (!settings().enabled || !settings().showButtons) return;
-        // Always scan the whole document: a slot's inputs can arrive in
-        // separate mutations, and grouping needs to see all of them.
-        const inputs = imageInputsIn(document);
+        if (!settings().enabled || !settings().showButtons || document.hidden) return;
+        collectInputs(root);
+        rescanSoon(0);
+    }
+
+    function* scanInputSteps() {
+        // Discovery is incremental. Ordinary chat mutations never trigger a
+        // document-wide query; grouping still sees the live slot subtree.
+        const inputs = [];
+        for (const input of knownInputs) {
+            if (!input.isConnected) {
+                input.__ipkButton?.remove();
+                input.__ipkButton = null;
+                input.removeAttribute(HOOKED_ATTR);
+                knownInputs.delete(input);
+            } else if (isImageInput(input)) inputs.push(input);
+            yield;
+        }
         if (!inputs.length) return;
 
         // Hosts re-render their panels and can drop our button while keeping
@@ -887,10 +957,11 @@
         for (const i of inputs) {
             if (i.getAttribute(HOOKED_ATTR) !== '1') continue;
             const btn = i.__ipkButton;
-            if (btn && !document.contains(btn)) {
+            if (!btn || !btn.isConnected) {
                 i.__ipkButton = null;
                 i.removeAttribute(HOOKED_ATTR);
             }
+            yield;
         }
 
         // Bucket inputs by their shared slot container. Ungrouped inputs get
@@ -904,6 +975,7 @@
             try { key = slotContainerFor(i) || i; } catch (e) { key = i; }
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(i);
+            yield;
         }
         // More unhooked fields than last time means the page really did change.
         if (pending > lastPending) retriesLeft = RETRY_LIMIT;
@@ -911,11 +983,17 @@
 
         let skipped = 0;
         for (const [key, list] of groups) {
+            yield;
+            if (!list.every((input) => input.isConnected)) continue;
             try {
                 // Slot already has a button from an earlier pass — just mark
                 // the newcomers as handled so they don't grow their own.
-                if (key instanceof Element && key.querySelector(`.${BTN_CLASS}`)) {
-                    for (const i of list) i.setAttribute(HOOKED_ATTR, '1');
+                const existing = key instanceof Element && key.querySelector(`.${BTN_CLASS}`);
+                if (existing) {
+                    for (const i of list) {
+                        i.setAttribute(HOOKED_ATTR, '1');
+                        i.__ipkButton = existing;
+                    }
                     continue;
                 }
                 const pick = bestAnchor(list);
@@ -949,7 +1027,10 @@
 
     function removeAllButtons() {
         document.querySelectorAll(`.${BTN_CLASS}`).forEach((b) => b.remove());
-        document.querySelectorAll(`[${HOOKED_ATTR}]`).forEach((i) => i.removeAttribute(HOOKED_ATTR));
+        document.querySelectorAll(`[${HOOKED_ATTR}]`).forEach((i) => {
+            i.removeAttribute(HOOKED_ATTR);
+            i.__ipkButton = null;
+        });
         document.querySelectorAll(`[${GROUP_ATTR}]`).forEach((i) => i.removeAttribute(GROUP_ATTR));
         document.querySelectorAll('.ipk_anchor').forEach((a) => a.classList.remove('ipk_anchor', 'ipk_anchor_rel'));
         lastPending = 0;
@@ -967,6 +1048,17 @@
      * ============================================================ */
     const REVEAL_CLASS = 'ipk_reveal_on';
     let fab = null;
+    let fabController = null;
+    let cancelFabPress = null;
+
+    function removeFab() {
+        cancelFabPress?.();
+        cancelFabPress = null;
+        fabController?.abort();
+        fabController = null;
+        fab?.remove();
+        fab = null;
+    }
 
     const isTouchDevice = () => window.matchMedia?.('(hover: none)')?.matches
         || 'ontouchstart' in window
@@ -1003,11 +1095,14 @@
      *  the way of whatever it happens to cover. */
     function ensureFab() {
         if (!usesReveal() || !settings().enabled || !settings().showButtons) {
-            fab?.remove();
-            fab = null;
+            removeFab();
             return;
         }
         if (fab && document.body.contains(fab)) return;
+
+        removeFab();
+        fabController = new AbortController();
+        const signal = fabController.signal;
 
         fab = document.createElement('div');
         fab.id = 'ipk_fab';
@@ -1024,6 +1119,11 @@
         restoreFabPos();
 
         let startX = 0, startY = 0, moved = false, dragging = false, longPress = null;
+        cancelFabPress = () => {
+            clearTimeout(longPress);
+            dragging = false;
+            moved = false;
+        };
 
         const onDown = (e) => {
             const p = e.touches?.[0] || e;
@@ -1063,6 +1163,7 @@
             if (dragging && !moved) toggleReveal();
             if (moved) saveFabPos();
             dragging = false;
+            moved = false;
         };
 
         fab.addEventListener('mousedown', onDown);
@@ -1072,10 +1173,14 @@
             e.preventDefault();
             onDown(e);
         }, { passive: false });
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('touchmove', onMove, { passive: false });
-        document.addEventListener('mouseup', onUp);
-        document.addEventListener('touchend', onUp);
+        document.addEventListener('mousemove', onMove, { signal });
+        document.addEventListener('touchmove', onMove, { passive: false, signal });
+        document.addEventListener('mouseup', onUp, { signal });
+        document.addEventListener('touchend', onUp, { signal });
+        document.addEventListener('touchcancel', () => {
+            cancelFabPress?.();
+            fab?.classList.remove('ipk_fab_drag');
+        }, { signal });
         fab.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
@@ -1111,11 +1216,51 @@
 
     let observer = null;
     let scanTimer = null;
-    let openWatchers = false;
+    let watcherController = null;
+    let cancelScan = null;
+    let scanIterator = null;
+    let scanAgain = false;
+
+    function cancelScanning() {
+        clearTimeout(scanTimer);
+        scanTimer = null;
+        cancelScan?.();
+        cancelScan = null;
+        scanIterator = null;
+        scanAgain = false;
+        clearTimeout(retryTimer);
+        retryTimer = null;
+    }
+
+    function runScanSlice() {
+        cancelScan = null;
+        if (document.hidden || !settings().enabled || !settings().showButtons) {
+            cancelScanning();
+            return;
+        }
+        scanIterator ??= scanInputSteps();
+        const end = performance.now() + 6;
+        do {
+            if (scanIterator.next().done) {
+                scanIterator = null;
+                if (scanAgain) {
+                    scanAgain = false;
+                    rescanSoon(0);
+                }
+                return;
+            }
+        } while (performance.now() < end);
+        cancelScan = idleTask(runScanSlice);
+    }
 
     function rescanSoon(delay = 250) {
+        if (document.hidden || !settings().enabled || !settings().showButtons) return;
         clearTimeout(scanTimer);
-        scanTimer = setTimeout(() => scanInputs(document), delay);
+        scanTimer = setTimeout(() => {
+            scanTimer = null;
+            if (scanIterator) { scanAgain = true; return; }
+            if (!cancelScan) cancelScan = idleTask(runScanSlice);
+        }, delay);
     }
 
     /* Panels that unfold without touching the DOM.
@@ -1128,15 +1273,16 @@
      * header — both are cheap to listen for, and the scan is debounced and
      * bails out immediately when there's nothing new. */
     function watchPanelOpens() {
-        if (openWatchers) return;
-        openWatchers = true;
+        if (watcherController) return;
+        watcherController = new AbortController();
+        const signal = watcherController.signal;
         // `toggle` doesn't bubble; capture catches it for every <details>.
         document.addEventListener('toggle', (e) => {
             if (e.target instanceof Element && e.target.tagName === 'DETAILS' && e.target.open) {
                 retriesLeft = RETRY_LIMIT;
                 rescanSoon(120);
             }
-        }, true);
+        }, { capture: true, signal });
         document.addEventListener('click', (e) => {
             const t = e.target;
             if (!(t instanceof Element)) return;
@@ -1144,22 +1290,35 @@
                 retriesLeft = RETRY_LIMIT;
                 rescanSoon(150);
             }
-        }, true);
+        }, { capture: true, signal });
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) cancelScanning();
+            else scanInputs(document);
+        }, { signal });
     }
 
     function startObserver() {
         watchPanelOpens();
         if (observer) return;
         observer = new MutationObserver((records) => {
+            if (document.hidden) return;
             let dirty = false;
             for (const r of records) {
+                // Chat streaming and our own UI cannot introduce upload slots.
+                if (r.target instanceof Element && r.target.closest('#chat, .ipk_modal, #ipk_settings, #ipk_fab, .ipk_hook_btn')) continue;
                 for (const n of r.addedNodes) {
-                    if (n.nodeType === 1) { dirty = true; break; }
+                    if (!(n instanceof Element) || n.matches('.ipk_hook_btn, .ipk_modal, #ipk_settings, #ipk_fab, #chat')) continue;
+                    if (n.matches('input[type="file"]') || n.querySelector('input[type="file"]')) {
+                        collectInputs(n);
+                        dirty = true;
+                    }
                 }
-                if (dirty) break;
+                for (const n of r.removedNodes) {
+                    if (!(n instanceof Element)) continue;
+                    if (n.matches(`input[type="file"], .${BTN_CLASS}`) || n.querySelector(`input[type="file"], .${BTN_CLASS}`)) dirty = true;
+                }
             }
             if (!dirty) return;
-            // Debounce: ST rerenders the chat constantly, no need to scan per node.
             rescanSoon();
         });
         observer.observe(document.body, { childList: true, subtree: true });
@@ -1168,8 +1327,10 @@
     function stopObserver() {
         observer?.disconnect();
         observer = null;
-        clearTimeout(retryTimer);
-        retryTimer = null;
+        watcherController?.abort();
+        watcherController = null;
+        cancelScanning();
+        knownInputs.clear();
     }
 
     /* ============================================================
@@ -1185,6 +1346,11 @@
         targetInput: null,   // set when the picker was opened from a hook button
         modal: null,
         dom: {},
+        page: 1,
+        loadVersion: 0,
+        openVersion: 0,
+        importJob: null,
+        inserting: false,
     };
 
     async function refreshPacks() {
@@ -1201,8 +1367,16 @@
         }
     }
 
-    async function loadActiveImages() {
-        state.images = state.activePackId ? await dbGetImages(state.activePackId) : [];
+    async function loadActiveImages(opening = false) {
+        if (!opening && (!state.modal || state.modal.classList.contains('ipk_hidden'))) return;
+        const version = ++state.loadVersion;
+        const packId = state.activePackId;
+        const images = packId ? await dbGetImages(packId) : [];
+        if (version !== state.loadVersion || packId !== state.activePackId) return;
+        resetMedia();
+        releaseUrls();
+        state.images = images;
+        state.page = 1;
     }
 
     /* ============================================================
@@ -1277,6 +1451,9 @@
                 <div class="ipk_footer">
                     <div class="ipk_status" id="ipk_status"></div>
                     <div class="ipk_spacer"></div>
+                    <button type="button" class="ipk_btn" id="ipk_page_prev" data-i18n="btn.previousPage"></button>
+                    <span id="ipk_page_info"></span>
+                    <button type="button" class="ipk_btn" id="ipk_page_next" data-i18n="btn.nextPage"></button>
                     <label class="ipk_check" id="ipk_append_wrap">
                         <input type="checkbox" id="ipk_append">
                         <span data-i18n="opt.append"></span>
@@ -1322,6 +1499,9 @@
             fileInput: $('ipk_file_input'),
             folderInput: $('ipk_folder_input'),
             close: $('ipk_close'),
+            pagePrev: $('ipk_page_prev'),
+            pageNext: $('ipk_page_next'),
+            pageInfo: $('ipk_page_info'),
         };
 
         // Our own file inputs must never get a hook button on them.
@@ -1405,16 +1585,21 @@
         d.fileInput.addEventListener('change', (e) => onImportFiles(e.target.files, e.target));
         d.folderInput.addEventListener('change', (e) => onImportFiles(e.target.files, e.target));
 
-        d.search.addEventListener('input', render);
+        d.search.addEventListener('input', () => {
+            state.page = 1;
+            render();
+        });
+        d.pagePrev.addEventListener('click', () => { state.page--; render(); });
+        d.pageNext.addEventListener('click', () => { state.page++; render(); });
         d.selectAll.addEventListener('click', () => {
             for (const im of visibleImages()) state.selected.add(im.id);
             if (state.targetInput) state.multiMode = true;
-            render();
+            render(false);
         });
         d.selectNone.addEventListener('click', () => {
             state.selected.clear();
             state.multiMode = false;
-            render();
+            render(false);
         });
         d.moveSelected.addEventListener('click', () => onTransferSelected(false));
         d.copySelected.addEventListener('click', () => onTransferSelected(true));
@@ -1445,12 +1630,18 @@
     }
 
     function closeModal() {
+        state.openVersion++;
+        state.loadVersion++;
+        if (state.importJob) state.importJob.cancelled = true;
         if (!state.modal) return;
         state.modal.classList.add('ipk_hidden');
         document.body.classList.remove('ipk_modal_open');
         state.targetInput = null;
         state.selected.clear();
         state.multiMode = false;
+        resetMedia();
+        state.dom.grid.replaceChildren();
+        state.images = [];
         releaseUrls();
     }
 
@@ -1463,9 +1654,42 @@
         return state.images.filter((im) => (im.name || '').toLowerCase().includes(q));
     }
 
-    function render() {
+    const PAGE_SIZE = 120;
+    let mediaObserver = null;
+    let mediaRecords = new WeakMap();
+    const pressCancels = new Set();
+
+    function resetMedia() {
+        mediaObserver?.disconnect();
+        mediaObserver = null;
+        mediaRecords = new WeakMap();
+        for (const cancel of pressCancels) cancel();
+        pressCancels.clear();
+    }
+
+    // Like ImageManager, assign src only near the viewport. Object URLs are
+    // created on demand too, and only the current page retains decoded media.
+    function watchMedia(img, record) {
+        if (!window.IntersectionObserver) {
+            img.src = objectUrl(record);
+            return;
+        }
+        mediaObserver ??= new IntersectionObserver((entries, observer) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                const rec = mediaRecords.get(entry.target);
+                if (rec) entry.target.src = objectUrl(rec);
+                observer.unobserve(entry.target);
+                mediaRecords.delete(entry.target);
+            }
+        }, { root: state.dom.grid.parentElement, rootMargin: '300px 0px' });
+        mediaRecords.set(img, record);
+        mediaObserver.observe(img);
+    }
+
+    function render(rebuildGrid = true) {
         const d = state.dom;
-        if (!d.grid) return;
+        if (!d.grid || state.modal.classList.contains('ipk_hidden')) return;
 
         // Pack dropdown
         d.packSelect.innerHTML = state.packs
@@ -1478,14 +1702,24 @@
         d.summary.textContent = `${tImages(state.images.length)} · ${humanSize(totalBytes)}`
             + (list.length !== state.images.length ? ` · ${t('search.found', { count: list.length })}` : '');
 
-        d.grid.innerHTML = '';
-        if (!list.length) {
-            d.empty.classList.remove('ipk_hidden');
-        } else {
-            d.empty.classList.add('ipk_hidden');
+        const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+        state.page = Math.max(1, Math.min(pages, state.page));
+        d.pagePrev.disabled = state.page === 1;
+        d.pageNext.disabled = state.page === pages;
+        for (const el of [d.pagePrev, d.pageNext, d.pageInfo]) el.classList.toggle('ipk_hidden', pages === 1);
+        d.pageInfo.textContent = t('status.page', { page: state.page, pages });
+
+        if (rebuildGrid) {
+            resetMedia();
+            d.grid.replaceChildren();
+            releaseUrls();
+            d.empty.classList.toggle('ipk_hidden', !!list.length);
             const frag = document.createDocumentFragment();
-            for (const im of list) frag.appendChild(cardFor(im));
+            for (const im of list.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE)) frag.appendChild(cardFor(im));
             d.grid.appendChild(frag);
+            d.grid.parentElement.scrollTop = 0;
+        } else {
+            for (const card of d.grid.children) card.classList.toggle('ipk_selected', state.selected.has(card.dataset.id));
         }
 
         const picking = !!state.targetInput;
@@ -1520,7 +1754,8 @@
 
         const img = document.createElement('img');
         img.loading = 'lazy';
-        img.src = objectUrl(im);
+        img.decoding = 'async';
+        watchMedia(img, im);
         img.alt = im.name || '';
         card.appendChild(img);
 
@@ -1543,7 +1778,7 @@
             e.stopPropagation();
             await dbDeleteImages([im.id]);
             state.selected.delete(im.id);
-            urlCache.delete(im.id);
+            releaseUrl(im.id);
             await loadActiveImages();
             render();
         });
@@ -1554,7 +1789,7 @@
             else state.selected.add(im.id);
             // Leaving the last item deselected drops us back to instant mode.
             if (!state.selected.size && state.targetInput) state.multiMode = false;
-            render();
+            render(false);
         };
 
         // One tap on a picture applies it straight away — that's the whole
@@ -1587,6 +1822,7 @@
             }, 450);
         };
         const cancelPress = () => clearTimeout(pressTimer);
+        pressCancels.add(cancelPress);
         card.addEventListener('touchstart', startPress, { passive: true });
         card.addEventListener('mousedown', startPress);
         for (const evt of ['touchend', 'touchmove', 'touchcancel', 'mouseup', 'mouseleave']) {
@@ -1642,6 +1878,10 @@
         if (!pack) return;
         const ok = await confirmDialog(t('confirm.deletePack', { name: pack.name, count: state.images.length }));
         if (!ok) return;
+        if (state.importJob?.packId === pack.id) {
+            toast(t('toast.importBusy'), 'info');
+            return;
+        }
         await dbDeletePack(pack.id);
         releaseUrls();
         state.activePackId = '';
@@ -1655,44 +1895,72 @@
     async function onImportFiles(fileList, inputEl) {
         const files = Array.from(fileList || []).filter((f) => /^image\//.test(f.type));
         if (inputEl) inputEl.value = '';
+        if (state.importJob) {
+            toast(t('toast.importBusy'), 'info');
+            return;
+        }
         if (!files.length) {
             toast(t('toast.noImages'), 'warning');
             return;
         }
         const s = settings();
         const d = state.dom;
+        const job = { cancelled: false, packId: state.activePackId };
+        state.importJob = job;
+        const processor = importProcessor();
         let done = 0;
-        const records = [];
-        for (const f of files) {
-            d.status.textContent = t('status.importing', { done: ++done, total: files.length });
-            // Yield so the status text actually paints between files.
-            await new Promise((r) => setTimeout(r, 0));
-            try {
-                const p = await processFile(f, s.maxSide, s.jpegQuality);
-                records.push({
-                    id: uid('img'),
-                    packId: state.activePackId,
-                    name: f.name || 'image',
-                    type: p.type,
-                    size: p.blob.size,
-                    w: p.w,
-                    h: p.h,
-                    added: Date.now() + records.length,
-                    blob: p.blob,
-                });
-            } catch (e) {
-                console.warn(`${LOG} import failed for ${f.name}`, e);
-            }
-        }
-        if (records.length) {
+        let imported = 0;
+        let records = [];
+        const flush = async () => {
+            if (!records.length) return;
             await dbPutImages(records);
-            const pack = await dbGetPack(state.activePackId);
-            if (pack) { pack.updated = Date.now(); await dbPutPack(pack); }
+            imported += records.length;
+            records = [];
+        };
+        try {
+            for (const f of files) {
+                if (job.cancelled) break;
+                d.status.textContent = t('status.importing', { done: ++done, total: files.length });
+                // Also yield on browsers using the main-thread fallback.
+                await new Promise((resolve) => idleTask(resolve));
+                if (job.cancelled) break;
+                try {
+                    const p = await processor.process(f, s.maxSide, s.jpegQuality);
+                    records.push({
+                        id: uid('img'),
+                        packId: job.packId,
+                        name: f.name || 'image',
+                        type: p.type,
+                        size: p.blob.size,
+                        w: p.w,
+                        h: p.h,
+                        added: Date.now() + done,
+                        blob: p.blob,
+                    });
+                } catch (e) {
+                    console.warn(`${LOG} import failed for ${f.name}`, e);
+                }
+                // Bound temporary Blob retention and commit progress as we go.
+                if (records.length >= 8) await flush();
+            }
+            await flush();
+            if (imported) {
+                const pack = await dbGetPack(job.packId);
+                if (pack) { pack.updated = Date.now(); await dbPutPack(pack); }
+            }
+            if (!job.cancelled && !state.modal.classList.contains('ipk_hidden') && state.activePackId === job.packId) {
+                await loadActiveImages();
+                render();
+                if (!job.cancelled) d.status.textContent = t('status.imported', { count: imported });
+            }
+            toast(t(job.cancelled ? 'toast.importStopped' : 'toast.imported', { count: imported }), 'success');
+        } catch (e) {
+            console.error(`${LOG} import failed`, e);
+            toast(t('err.import'), 'error');
+        } finally {
+            processor.close();
+            state.importJob = null;
         }
-        await loadActiveImages();
-        render();
-        d.status.textContent = t('status.imported', { count: records.length });
-        toast(t('toast.imported', { count: records.length }), 'success');
     }
 
     /* ------------------------------------------------------------
@@ -1732,7 +2000,7 @@
         if (!copy) {
             // The records moved out of the current pack — drop their cached
             // object URLs so the grid doesn't show ghosts.
-            for (const id of ids) urlCache.delete(id);
+            for (const id of ids) releaseUrl(id);
         }
         state.selected.clear();
         state.multiMode = false;
@@ -1837,13 +2105,14 @@
         if (!ok) return;
         const ids = [...state.selected];
         await dbDeleteImages(ids);
-        for (const id of ids) urlCache.delete(id);
+        for (const id of ids) releaseUrl(id);
         state.selected.clear();
         await loadActiveImages();
         render();
     }
 
     async function onInsert() {
+        if (state.inserting) return;
         const input = state.targetInput;
         if (!input) return;
         if (!document.contains(input)) {
@@ -1856,29 +2125,37 @@
             return;
         }
 
-        // Keep the on-screen order rather than click order — predictable.
-        const ordered = state.images.filter((im) => state.selected.has(im.id));
-        const files = [];
-        for (const im of ordered) {
-            const rec = im.blob ? im : await dbGetImage(im.id);
-            if (rec?.blob) files.push(blobToFile(rec));
+        state.inserting = true;
+        try {
+            // Keep the on-screen order rather than click order — predictable.
+            const ordered = state.images.filter((im) => state.selected.has(im.id));
+            const files = [];
+            for (const im of ordered) {
+                const rec = im.blob ? im : await dbGetImage(im.id);
+                if (rec?.blob) files.push(blobToFile(rec));
+            }
+            if (!files.length) return;
+
+            const append = !!(state.dom.append?.checked && input.multiple);
+            const ok = pushFilesToInput(input, files, append);
+            if (!ok) return;
+
+            toast(t('toast.inserted', { count: files.length }), 'success');
+            closeModal();
+        } finally {
+            state.inserting = false;
         }
-        if (!files.length) return;
-
-        const append = !!(state.dom.append?.checked && input.multiple);
-        const ok = pushFilesToInput(input, files, append);
-        if (!ok) return;
-
-        toast(t('toast.inserted', { count: files.length }), 'success');
-        closeModal();
     }
 
     /** Open the picker bound to a specific file input. */
     async function openPicker(input) {
+        const version = ++state.openVersion;
         state.targetInput = input;
         buildModal();
         await refreshPacks();
-        await loadActiveImages();
+        if (version !== state.openVersion) return;
+        await loadActiveImages(true);
+        if (version !== state.openVersion) return;
         state.selected.clear();
         state.multiMode = false;
         openModal();
@@ -1890,10 +2167,13 @@
 
     /** Open the manager with no target input (pure library management). */
     async function openManager() {
+        const version = ++state.openVersion;
         state.targetInput = null;
         buildModal();
         await refreshPacks();
-        await loadActiveImages();
+        if (version !== state.openVersion) return;
+        await loadActiveImages(true);
+        if (version !== state.openVersion) return;
         state.selected.clear();
         state.multiMode = false;
         openModal();
@@ -2072,10 +2352,10 @@
             applyRevealClasses();
         } else {
             stopObserver();
+            closeModal();
             removeAllButtons();
             document.body.classList.remove('ipk_reveal_mode', REVEAL_CLASS);
-            fab?.remove();
-            fab = null;
+            removeFab();
         }
     }
 
